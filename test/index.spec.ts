@@ -252,8 +252,9 @@ describe("GET /generate/:id/back", () => {
     const url = "https://qr.test/p/haruharu";
     const { data, size: n } = encode(url, { ecc: "Q", border: 0 });
 
+    // buildBackCard の qrPanel(x305 y100 w300 h310) から renderQrPanel が算出する値
     const OX = 326;
-    const OY = 121;
+    const OY = 126;
     const SIZE = 258;
     const quiet = 4;
     const cell = SIZE / (n + quiet * 2);
@@ -348,6 +349,82 @@ describe("GET /preview/:id", () => {
   });
 });
 
+describe("layout editor", () => {
+  async function postJson(path: string, body: unknown) {
+    return call(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it("GET /editor serves the editor HTML", async () => {
+    const res = await call("/editor");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("text/html; charset=utf-8");
+    expect(await res.text()).toContain("レイアウトエディタ");
+  });
+
+  it("GET /editor/layout returns the resolved layout", async () => {
+    await postJson("/editor/reset", {});
+    const res = await call("/editor/layout");
+    const { layout } = (await res.json()) as { layout: any };
+    expect(layout.front.nameJp.type).toBe("text");
+    expect(layout.back.qrPanel.type).toBe("qr");
+  });
+
+  it("POST /editor/preview renders sample SVG for the given side", async () => {
+    const back = await postJson("/editor/preview", { side: "back", layout: {} });
+    expect(back.status).toBe(200);
+    expect(back.headers.get("Content-Type")).toBe("image/svg+xml; charset=utf-8");
+    expect(await back.text()).toContain("SCAN TO CONNECT");
+
+    const front = await postJson("/editor/preview", { side: "front", layout: {} });
+    expect(await front.text()).toContain("山田 太郎"); // sample data
+  });
+
+  it("saves a moved element and reflects it in /generate", async () => {
+    await postJson("/editor/reset", {});
+    stubNotion({ haruharu: { Name_JP: "川本" } });
+
+    await postJson("/editor/layout", { front: { nameJp: { x: 123, y: 321 } } });
+
+    const got = (await (await call("/editor/layout")).json()) as { layout: any };
+    expect(got.layout.front.nameJp.x).toBe(123);
+    expect(got.layout.front.nameJp.y).toBe(321);
+
+    const svg = await (await call("/generate/haruharu")).text();
+    expect(svg).toContain('x="123"');
+    expect(svg).toContain('y="321"');
+  });
+
+  it("sanitizes hostile values from the posted layout", async () => {
+    await postJson("/editor/reset", {});
+    const res = await postJson("/editor/layout", {
+      front: {
+        nameJp: { fill: "url(#x)", x: 1e9, opacity: 42, anchor: "sideways" },
+        orgName: { text: "<script>alert(1)</script>" },
+      },
+    });
+    const { layout } = (await res.json()) as { layout: any };
+    expect(layout.front.nameJp.fill).toBe("#ffffff"); // rejected -> default
+    expect(layout.front.nameJp.x).toBeLessThanOrEqual(4000); // clamped
+    expect(layout.front.nameJp.opacity).toBe(1); // clamped
+    expect(layout.front.nameJp.anchor).toBe("start"); // rejected -> default
+
+    stubNotion({ x: { Name_JP: "テスト" } });
+    const svg = await (await call("/generate/x")).text();
+    expect(svg).not.toContain("<script>alert(1)</script>");
+  });
+
+  it("POST /editor/reset restores defaults", async () => {
+    await postJson("/editor/layout", { front: { nameJp: { x: 999 } } });
+    await postJson("/editor/reset", {});
+    const { layout } = (await (await call("/editor/layout")).json()) as { layout: any };
+    expect(layout.front.nameJp.x).toBe(46); // DEFAULT_LAYOUT value
+  });
+});
+
 describe("fallback routing", () => {
   it("redirects / to DEFAULT_REDIRECT_URL", async () => {
     stubNotion({});
@@ -366,6 +443,6 @@ describe("fallback routing", () => {
   it("rejects non-GET methods with 405", async () => {
     const res = await call("/p/haruharu", { method: "POST" });
     expect(res.status).toBe(405);
-    expect(res.headers.get("Allow")).toBe("GET, HEAD");
+    expect(res.headers.get("Allow")).toBe("GET, HEAD, POST");
   });
 });

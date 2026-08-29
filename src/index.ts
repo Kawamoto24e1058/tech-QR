@@ -2,8 +2,13 @@
  * tech-QR : Notion Database を管理画面(ヘッドレスCMS)にした Cloudflare Worker
  *
  * ルーティング:
- *   GET /preview            -> メンバー一覧(HTML)
- *   GET /preview/:id        -> 表裏の名刺を画面表示 + そこからSVGダウンロード(HTML)
+ *   GET  /preview           -> メンバー一覧(HTML)
+ *   GET  /preview/:id       -> 表裏の名刺を画面表示 + そこからSVGダウンロード(HTML)
+ *   GET  /editor            -> ビジュアルレイアウトエディタ(HTML)
+ *   GET  /editor/layout     -> 現在のレイアウトJSON
+ *   POST /editor/preview    -> 作業中レイアウト+サンプルで SVG を返す
+ *   POST /editor/layout     -> レイアウトを KV に保存
+ *   POST /editor/reset      -> レイアウトをデフォルトに戻す
  *   GET /p/:id             -> Notion の ID(Title)=:id かつ Active=true のレコードの
  *                             TargetURL へ 302/307 リダイレクト。該当なし -> 404
  *   GET /generate/:id       -> 名刺の表面SVGを生成し attachment で返す。該当なし -> 404
@@ -12,8 +17,18 @@
  *   その他                  -> DEFAULT_REDIRECT_URL へフォールバックリダイレクト
  */
 
-import { buildBackCard, buildFrontCard, escapeXml, type CardFields } from "./card-template";
+import {
+  buildBackCard,
+  buildFrontCard,
+  escapeXml,
+  type CardFields,
+  type CardSide,
+} from "./card-template";
+import { buildEditorPage, SAMPLE_FIELDS } from "./editor";
+import { type CardLayout, DEFAULT_LAYOUT, resolveLayout } from "./layout";
 import { buildCardPreview, buildIndexPage, type MemberSummary } from "./preview";
+
+const LAYOUT_KEY = "layout:v1";
 
 /**
  * 環境変数 / シークレット。
@@ -39,12 +54,25 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const { pathname } = url;
+    const method = request.method;
+
+    // ── エディタ API（POST）─────────────────────────────
+    if (method === "POST" && pathname === "/editor/preview") {
+      return editorPreview(request);
+    }
+    if (method === "POST" && pathname === "/editor/layout") {
+      return editorSaveLayout(request, env);
+    }
+    if (method === "POST" && pathname === "/editor/reset") {
+      await env.LAYOUT.delete(LAYOUT_KEY).catch(() => {});
+      return Response.json({ ok: true }, { headers: { "Cache-Control": "no-store" } });
+    }
 
     // GET / HEAD 以外は許可しない
-    if (request.method !== "GET" && request.method !== "HEAD") {
+    if (method !== "GET" && method !== "HEAD") {
       return new Response("Method Not Allowed", {
         status: 405,
-        headers: { Allow: "GET, HEAD", "Content-Type": "text/plain; charset=utf-8" },
+        headers: { Allow: "GET, HEAD, POST", "Content-Type": "text/plain; charset=utf-8" },
       });
     }
 
@@ -57,6 +85,15 @@ export default {
     }
 
     const base = (env.PUBLIC_BASE_URL || url.origin).replace(/\/+$/, "");
+
+    // /editor : ビジュアルレイアウトエディタ
+    if (pathname === "/editor" || pathname === "/editor/") {
+      return htmlResponse(buildEditorPage());
+    }
+    if (pathname === "/editor/layout") {
+      const layout = await loadLayout(env);
+      return Response.json({ layout }, { headers: { "Cache-Control": "no-store" } });
+    }
 
     // /preview : メンバー一覧
     if (pathname === "/preview" || pathname === "/preview/") {
@@ -87,7 +124,7 @@ export default {
       if (!page) {
         return notFound(id);
       }
-      return htmlResponse(buildCardPreview(id, toCardFields(page), base));
+      return htmlResponse(buildCardPreview(id, toCardFields(page), base, await loadLayout(env)));
     }
 
     // /generate/:id[/back] : 名刺SVG生成
@@ -111,10 +148,11 @@ export default {
       }
 
       const fields = toCardFields(page);
+      const layout = await loadLayout(env);
       if (isBack) {
-        return svgDownload(buildBackCard(fields, `${base}/p/${id}`), `${id}-card-back`);
+        return svgDownload(buildBackCard(fields, `${base}/p/${id}`, layout), `${id}-card-back`);
       }
-      return svgDownload(buildFrontCard(fields), `${id}-card-front`);
+      return svgDownload(buildFrontCard(fields, layout), `${id}-card-front`);
     }
 
     // /p/:id : リダイレクト処理
@@ -341,6 +379,53 @@ function htmlResponse(html: string): Response {
     status: 200,
     headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
   });
+}
+
+/* ────────────────────────────────────────────────────────────
+ *  レイアウト（KV）+ エディタ API
+ * ──────────────────────────────────────────────────────────── */
+
+/** KV から保存済みレイアウトを読み、デフォルトにマージして返す */
+async function loadLayout(env: Env): Promise<CardLayout> {
+  try {
+    const raw = await env.LAYOUT.get(LAYOUT_KEY, "json");
+    return resolveLayout(raw);
+  } catch (err) {
+    console.error("loadLayout failed", { error: String(err) });
+    return DEFAULT_LAYOUT;
+  }
+}
+
+/** POST /editor/preview : 作業中レイアウト + サンプルデータで SVG を返す */
+async function editorPreview(request: Request): Promise<Response> {
+  let body: { side?: string; layout?: unknown };
+  try {
+    body = await request.json();
+  } catch {
+    return new Response("bad json", { status: 400 });
+  }
+  const side: CardSide = body.side === "back" ? "back" : "front";
+  const layout = resolveLayout(body.layout);
+  const svg =
+    side === "back"
+      ? buildBackCard(SAMPLE_FIELDS, "https://tech-qr.example.com/p/yamada", layout)
+      : buildFrontCard(SAMPLE_FIELDS, layout);
+  return new Response(svg, {
+    headers: { "Content-Type": "image/svg+xml; charset=utf-8", "Cache-Control": "no-store" },
+  });
+}
+
+/** POST /editor/layout : レイアウトをサニタイズして KV に保存 */
+async function editorSaveLayout(request: Request, env: Env): Promise<Response> {
+  let raw: unknown;
+  try {
+    raw = await request.json();
+  } catch {
+    return new Response("bad json", { status: 400 });
+  }
+  const layout = resolveLayout(raw);
+  await env.LAYOUT.put(LAYOUT_KEY, JSON.stringify(layout));
+  return Response.json({ ok: true, layout }, { headers: { "Cache-Control": "no-store" } });
 }
 
 function badGateway(): Response {

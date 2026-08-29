@@ -6,6 +6,7 @@
 | --- | --- | --- |
 | **動的リダイレクト** | `GET /p/:id` | 名刺裏面の QR コードの転送先を、Notion の `TargetURL` を書き換えるだけで差し替え |
 | **名刺プレビュー** | `GET /preview` | メンバー一覧 → 各人の表裏の名刺を画面で確認し、その場でダウンロード |
+| **レイアウトエディタ** | `GET /editor` | 名刺のテキスト/ロゴ/QRをドラッグで移動、サイズ・書体・色を調整。保存すると全員の名刺に反映（KV） |
 | **名刺SVG生成** | `GET /generate/:id` | 名刺 SVG を `content-disposition: attachment` で直接ダウンロード（プレビューのDLボタンの実体） |
 
 - **Runtime**: Cloudflare Workers (TypeScript)
@@ -20,6 +21,11 @@
 | --- | --- |
 | `GET /preview` | メンバー一覧（HTML）。各行から `/preview/:id` へ |
 | `GET /preview/:id` | 表裏の名刺を inline 表示（HTML）＋ SVG ダウンロードボタン。該当なしは `404` |
+| `GET /editor` | ビジュアルレイアウトエディタ（HTML）。認証なし |
+| `GET /editor/layout` | 現在のレイアウト JSON（KV の保存値をデフォルトにマージ） |
+| `POST /editor/preview` | `{side, layout}` を受け取りサンプルデータで SVG を返す（未保存プレビュー用） |
+| `POST /editor/layout` | レイアウト JSON をサニタイズして KV に保存 |
+| `POST /editor/reset` | KV を消してデフォルトに戻す |
 | `GET /p/:id` | `ID`(Title)=`:id` かつ `Active`=`true` のレコードの `TargetURL` へ `302`（または `307`）でリダイレクト。該当なしは `404`。 |
 | `GET /generate/:id` | 名刺 **表面** SVG を生成し `content-disposition: attachment; filename="<id>-card-front.svg"` で返却。該当なしは `404`。 |
 | `GET /generate/:id/back` | 名刺 **裏面** SVG（メンバー別QR入り）を生成し `filename="<id>-card-back.svg"` で返却。QR は `<PUBLIC_BASE_URL>/p/<id>` をエンコード。 |
@@ -191,6 +197,14 @@ npx wrangler secret put NOTION_API_KEY
 # プロンプトに Integration Token を貼り付け
 ```
 
+### 3-3b. KV Namespace を作成（レイアウトエディタ用）
+
+```bash
+npx wrangler kv namespace create LAYOUT
+```
+
+出力された `id` を `wrangler.toml` の `[[kv_namespaces]]` に貼り、`npm run cf-typegen` を再実行。
+
 ### 3-4. デプロイ
 
 ```bash
@@ -231,7 +245,7 @@ https://qr.example.com/generate/haruharu/back     # 裏面SVGを直接DL
 
 > `/preview` は認証なしの公開ページです（Worker 全体が公開のため）。メンバーの ID / 氏名 / Active 状態が見えます。
 
-### 4-2. デザイン仕様（`src/card-template.ts`）
+### 4-2. デザイン仕様
 
 - 日本標準名刺サイズ **91mm × 55mm**（`viewBox="0 0 910 550"`、`width="91mm" height="55mm"`）
 - Figma Make のデザイン（`business-card-front.svg` / `-back.svg`）に準拠。背景 `#0a0a0c`、外枠 + 内側ヘアライン + 四隅マーク
@@ -240,6 +254,16 @@ https://qr.example.com/generate/haruharu/back     # 裏面SVGを直接DL
   スキルタグのチップ（先頭 3 件）、連絡先（`Email` / `github.com/<Github_ID>` / `@<X_ID>`。空欄は非表示）
 - **裏面**: `<PUBLIC_BASE_URL>/p/<id>` をエンコードした実データ QR（丸みモジュール、ファインダーは 1:1:3:1:1 比を厳守）、
   URL 表記、両サイドにロゴのウォーターマーク、フッター `BUILD · LEARN · SHIP`
+- **座標・サイズ・書体は `src/layout.ts` の `DEFAULT_LAYOUT` が持ち、`/editor` の編集差分を KV に保存してマージ**
+
+### 4-2b. レイアウトエディタ（`GET /editor`）
+
+- カードのテキスト/ロゴ/QRパネルを**ドラッグで移動**。右パネルで X/Y・フォントサイズ・太さ・字間・
+  揃え（左/中央/右）・色・不透明度・書体（ゴシック/等幅）・表示ON-OFF・固定文字列を編集。
+- 「保存」で `POST /editor/layout` → **KV に保存され全員の名刺（表・裏・プレビュー・ダウンロード）に即反映**。
+- 「デフォルトに戻す」で KV を削除しコードの `DEFAULT_LAYOUT` に復帰。
+- 認証なし（誰でも編集可）。壊れても「デフォルトに戻す」で復旧できる。ゲートしたい場合は Cloudflare Access。
+- 固定装飾（外枠・四隅マーク・区切り線・グリッドドット）はエディタ対象外（コードの chrome 定数）。
 
 ### 4-3. ロゴの差し替え
 
@@ -273,14 +297,18 @@ npm run embed-logo   # src/logo.ts を再生成
 - `/generate/:id`（表・裏とも）はキャッシュせず毎回生成。応答は `Cache-Control: no-store`。
 - QR 生成は `uqr`（依存ゼロ・ランタイム非依存）。ECC レベル `Q`、クワイエットゾーン 4 モジュール。Figma 版のダミー QR は実データ QR に置換。
 - `Role` は Notion の Select、`Role_EN` は Formula。Worker 側は `select.name` / `formula.string` を読む。
+- レイアウトは KV（binding `LAYOUT`、key `layout:v1`）。`/editor/layout` の POST は認証なしなので
+  `resolveLayout()` で数値クランプ・色は `#rrggbb` のみ許可・enum 検証・固定文字列 120 字上限。
 - Notion API がエラーを返した場合は `502 Bad Gateway`。
 - セキュリティ: `:id` は文字種を制限、`TargetURL` は `http(s)` のみ許可（`javascript:` 等を弾く）、Notion 文字列は SVG 出力時に XML エスケープ、リダイレクトに `Referrer-Policy: no-referrer`。
 
 ## 6. ファイル構成
 
 ```
-src/index.ts             Worker 本体（ルーティング / Notion 連携 / キャッシュ）
-src/card-template.ts     名刺SVG生成（表面 / 裏面 / QR描画）
+src/index.ts             Worker 本体（ルーティング / Notion 連携 / キャッシュ / KV）
+src/card-template.ts     名刺SVG生成（レイアウト駆動 / QR描画）
+src/layout.ts            レイアウトのスキーマ + DEFAULT_LAYOUT + サニタイズ
+src/editor.ts            /editor のエディタページ（HTML + JS）
 src/preview.ts           プレビューHTML（一覧 / 個別）
 src/logo.png             テック部ロゴ（黒 PNG。差し替え元）
 src/logo.ts              logo.png を base64 で埋め込んだ定数（embed-logo で生成）

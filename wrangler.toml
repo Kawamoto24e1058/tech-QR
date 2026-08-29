@@ -16,6 +16,11 @@ workers_dev = true
 [observability]
 enabled = true
 
+# 名刺レイアウト（/editor が保存する JSON）の保存先
+[[kv_namespaces]]
+binding = "LAYOUT"
+id = "a9acb7aadc564236a2ce04aee8eba7b8"
+
 # ─────────────────────────────────────────────────────────────
 #  環境変数 (機密でない値のみここに置く)
 #  機密値 (NOTION_API_KEY) は `wrangler secret put` で登録する

@@ -7,6 +7,7 @@
  * ここでは inline で埋め込んで表示する。
  */
 import { buildBackCard, buildFrontCard, escapeXml, type CardFields } from "./card-template";
+import { DEFAULT_LAYOUT, type CardLayout } from "./layout";
 
 const esc = escapeXml;
 
@@ -73,10 +74,15 @@ const INDEX_CSS = `${BASE_CSS}
 `;
 
 /** GET /preview/:id */
-export function buildCardPreview(id: string, f: CardFields, baseUrl: string): string {
+export function buildCardPreview(
+  id: string,
+  f: CardFields,
+  baseUrl: string,
+  layout: CardLayout = DEFAULT_LAYOUT,
+): string {
   const qrUrl = `${baseUrl}/p/${id}`;
-  const front = buildFrontCard(f);
-  const back = buildBackCard(f, qrUrl);
+  const front = buildFrontCard(f, layout);
+  const back = buildBackCard(f, qrUrl, layout);
   const title = f.nameJp || f.nameEn || id;
 
   return `<!doctype html>
@@ -141,7 +147,7 @@ export function buildIndexPage(members: MemberSummary[]): string {
 <body>
 <div class="wrap">
   <h1>名刺プレビュー</h1>
-  <p class="muted">名前をクリックすると表裏の名刺を確認・ダウンロードできます（${members.length} 名）。</p>
+  <p class="muted">名前をクリックすると表裏の名刺を確認・ダウンロードできます（${members.length} 名）。 <a href="/editor">レイアウトを編集 →</a></p>
   ${body}
 </div>
 </body>
