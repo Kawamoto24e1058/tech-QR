@@ -13,6 +13,8 @@ export default defineConfig({
           REDIRECT_STATUS: "302",
           // テストでは Notion をモックするのでキャッシュは無効化
           CACHE_TTL_SECONDS: "0",
+          // 空にしてリクエストの origin(https://qr.test)を使わせる
+          PUBLIC_BASE_URL: "",
         },
       },
     }),

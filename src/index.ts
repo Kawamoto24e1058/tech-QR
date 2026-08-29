@@ -2,6 +2,8 @@
  * tech-QR : Notion Database を管理画面(ヘッドレスCMS)にした Cloudflare Worker
  *
  * ルーティング:
+ *   GET /preview            -> メンバー一覧(HTML)
+ *   GET /preview/:id        -> 表裏の名刺を画面表示 + そこからSVGダウンロード(HTML)
  *   GET /p/:id             -> Notion の ID(Title)=:id かつ Active=true のレコードの
  *                             TargetURL へ 302/307 リダイレクト。該当なし -> 404
  *   GET /generate/:id       -> 名刺の表面SVGを生成し attachment で返す。該当なし -> 404
@@ -11,6 +13,7 @@
  */
 
 import { buildBackCard, buildFrontCard, escapeXml, type CardFields } from "./card-template";
+import { buildCardPreview, buildIndexPage, type MemberSummary } from "./preview";
 
 /**
  * 環境変数 / シークレット。
@@ -53,6 +56,40 @@ export default {
       );
     }
 
+    const base = (env.PUBLIC_BASE_URL || url.origin).replace(/\/+$/, "");
+
+    // /preview : メンバー一覧
+    if (pathname === "/preview" || pathname === "/preview/") {
+      let members: MemberSummary[];
+      try {
+        members = await fetchAllMembers(env);
+      } catch (err) {
+        console.error("fetchAllMembers failed", { error: String(err) });
+        return badGateway();
+      }
+      return htmlResponse(buildIndexPage(members));
+    }
+
+    // /preview/:id : 名刺プレビュー
+    const previewMatch = pathname.match(/^\/preview\/([^/]+)\/?$/);
+    if (previewMatch) {
+      const id = decodeURIComponent(previewMatch[1]);
+      if (!ID_PATTERN.test(id)) {
+        return notFound(id);
+      }
+      let page: NotionPage | null;
+      try {
+        page = await fetchMemberById(id, env);
+      } catch (err) {
+        console.error("fetchMemberById failed", { id, error: String(err) });
+        return badGateway();
+      }
+      if (!page) {
+        return notFound(id);
+      }
+      return htmlResponse(buildCardPreview(id, toCardFields(page), base));
+    }
+
     // /generate/:id[/back] : 名刺SVG生成
     const genMatch = pathname.match(/^\/generate\/([^/]+?)(?:\.svg)?(\/back)?(?:\.svg)?\/?$/);
     if (genMatch) {
@@ -75,7 +112,6 @@ export default {
 
       const fields = toCardFields(page);
       if (isBack) {
-        const base = (env.PUBLIC_BASE_URL || url.origin).replace(/\/+$/, "");
         return svgDownload(buildBackCard(fields, `${base}/p/${id}`), `${id}-card-back`);
       }
       return svgDownload(buildFrontCard(fields), `${id}-card-front`);
@@ -134,6 +170,44 @@ async function fetchMemberById(id: string, env: Env): Promise<NotionPage | null>
 
   const data = (await res.json()) as NotionQueryResponse;
   return data.results?.[0] ?? null;
+}
+
+/** Notion Database の全レコードを ID 昇順で取得（プレビュー一覧用） */
+async function fetchAllMembers(env: Env): Promise<MemberSummary[]> {
+  const members: MemberSummary[] = [];
+  let cursor: string | undefined;
+
+  do {
+    const res = await fetch(`${NOTION_API_BASE}/databases/${env.NOTION_DATABASE_ID}/query`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.NOTION_API_KEY}`,
+        "Notion-Version": NOTION_VERSION,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        page_size: 100,
+        start_cursor: cursor,
+        sorts: [{ property: "ID", direction: "ascending" }],
+      }),
+    });
+
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`Notion API ${res.status}: ${detail.slice(0, 500)}`);
+    }
+
+    const data = (await res.json()) as NotionQueryResponse;
+    for (const page of data.results ?? []) {
+      const id = getPlainText(page, "ID");
+      if (id) {
+        members.push({ id, name: getPlainText(page, "Name_JP"), active: getCheckbox(page, "Active") });
+      }
+    }
+    cursor = data.has_more ? data.next_cursor ?? undefined : undefined;
+  } while (cursor);
+
+  return members;
 }
 
 /**
@@ -262,6 +336,13 @@ function svgDownload(svg: string, basename: string): Response {
   });
 }
 
+function htmlResponse(html: string): Response {
+  return new Response(html, {
+    status: 200,
+    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+  });
+}
+
 function badGateway(): Response {
   return new Response("Bad Gateway (Notion API error)", {
     status: 502,
@@ -333,4 +414,6 @@ interface NotionPage {
 
 interface NotionQueryResponse {
   results?: NotionPage[];
+  has_more?: boolean;
+  next_cursor?: string | null;
 }

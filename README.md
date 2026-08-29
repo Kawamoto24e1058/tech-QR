@@ -5,7 +5,8 @@
 | 機能 | エンドポイント | 用途 |
 | --- | --- | --- |
 | **動的リダイレクト** | `GET /p/:id` | 名刺裏面の QR コードの転送先を、Notion の `TargetURL` を書き換えるだけで差し替え |
-| **名刺SVG生成** | `GET /generate/:id` | Notion のメンバー情報を SVG テンプレートに流し込み、印刷入稿用 SVG を自動ダウンロード |
+| **名刺プレビュー** | `GET /preview` | メンバー一覧 → 各人の表裏の名刺を画面で確認し、その場でダウンロード |
+| **名刺SVG生成** | `GET /generate/:id` | 名刺 SVG を `content-disposition: attachment` で直接ダウンロード（プレビューのDLボタンの実体） |
 
 - **Runtime**: Cloudflare Workers (TypeScript)
 - **管理画面 (CMS)**: Notion Database（1 つの DB を両機能で共有。`ID`(Title) がキー）
@@ -17,6 +18,8 @@
 
 | パス | 挙動 |
 | --- | --- |
+| `GET /preview` | メンバー一覧（HTML）。各行から `/preview/:id` へ |
+| `GET /preview/:id` | 表裏の名刺を inline 表示（HTML）＋ SVG ダウンロードボタン。該当なしは `404` |
 | `GET /p/:id` | `ID`(Title)=`:id` かつ `Active`=`true` のレコードの `TargetURL` へ `302`（または `307`）でリダイレクト。該当なしは `404`。 |
 | `GET /generate/:id` | 名刺 **表面** SVG を生成し `content-disposition: attachment; filename="<id>-card-front.svg"` で返却。該当なしは `404`。 |
 | `GET /generate/:id/back` | 名刺 **裏面** SVG（メンバー別QR入り）を生成し `filename="<id>-card-back.svg"` で返却。QR は `<PUBLIC_BASE_URL>/p/<id>` をエンコード。 |
@@ -207,17 +210,26 @@ https://qr.example.com/p/haruharu
 
 ---
 
-## 4. 名刺SVGの生成と入稿
+## 4. 名刺のプレビューと入稿
 
-### 4-1. ダウンロード
+### 4-1. プレビュー画面から確認・ダウンロード（推奨）
 
 ```
-https://qr.example.com/generate/haruharu        # 表面
-https://qr.example.com/generate/haruharu/back    # 裏面（QR入り）
+https://qr.example.com/preview
 ```
 
-ブラウザで開くと `haruharu-card-front.svg` / `haruharu-card-back.svg` が自動ダウンロードされます。
-Notion を編集すれば次回アクセス時に即反映されます（`/generate` はキャッシュしません）。
+メンバー一覧が出るので名前をクリック → 表裏の名刺が画面に表示され、各カードの
+「↓ SVG をダウンロード」ボタンで保存できます。Notion を編集すれば即反映（キャッシュなし）。
+
+直リンクでも取得できます:
+
+```
+https://qr.example.com/preview/haruharu           # プレビュー画面
+https://qr.example.com/generate/haruharu          # 表面SVGを直接DL
+https://qr.example.com/generate/haruharu/back     # 裏面SVGを直接DL
+```
+
+> `/preview` は認証なしの公開ページです（Worker 全体が公開のため）。メンバーの ID / 氏名 / Active 状態が見えます。
 
 ### 4-2. デザイン仕様（`src/card-template.ts`）
 
@@ -269,6 +281,7 @@ npm run embed-logo   # src/logo.ts を再生成
 ```
 src/index.ts             Worker 本体（ルーティング / Notion 連携 / キャッシュ）
 src/card-template.ts     名刺SVG生成（表面 / 裏面 / QR描画）
+src/preview.ts           プレビューHTML（一覧 / 個別）
 src/logo.png             テック部ロゴ（黒 PNG。差し替え元）
 src/logo.ts              logo.png を base64 で埋め込んだ定数（embed-logo で生成）
 scripts/embed-logo.mjs   logo.png → logo.ts 再生成スクリプト

@@ -50,10 +50,15 @@ function stubNotion(members: Record<string, Member>, opts: { fail?: boolean } = 
       return new Response("boom", { status: 500 });
     }
     const body = JSON.parse(String(init?.body ?? "{}"));
-    const requestedId: string = body.filter?.title?.equals ?? "";
-    const member = members[requestedId];
-    const results = member ? [toNotionPage(requestedId, member)] : [];
-    return new Response(JSON.stringify({ object: "list", results }), {
+    const requestedId: string | undefined = body.filter?.title?.equals;
+    // filter あり = 1件検索 / filter なし = 全件（fetchAllMembers）
+    const results =
+      requestedId === undefined
+        ? Object.entries(members).map(([id, m]) => toNotionPage(id, m))
+        : members[requestedId]
+          ? [toNotionPage(requestedId, members[requestedId])]
+          : [];
+    return new Response(JSON.stringify({ object: "list", results, has_more: false, next_cursor: null }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
@@ -285,6 +290,61 @@ describe("GET /generate/:id/back", () => {
     }
     expect(painted.size).toBe(expectedOutsideFinders);
     expect(eyeSquares).toBe(3); // three finder patterns
+  });
+});
+
+describe("GET /preview", () => {
+  it("lists all members as HTML with links to each preview", async () => {
+    stubNotion({
+      haruharu: { Name_JP: "山田 太郎", active: true },
+      sato: { Name_JP: "佐藤 花子", active: false },
+    });
+    const res = await call("/preview");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("text/html; charset=utf-8");
+
+    const html = await res.text();
+    expect(html).toContain("山田 太郎");
+    expect(html).toContain("佐藤 花子");
+    expect(html).toContain('href="/preview/haruharu"');
+    expect(html).toContain('href="/preview/sato"');
+    expect(html).toContain("Active");
+    expect(html).toContain("停止中");
+  });
+});
+
+describe("GET /preview/:id", () => {
+  beforeEach(() => {
+    stubNotion({
+      haruharu: {
+        Name_JP: "山田 太郎",
+        Role: "部長",
+        Role_EN: "President",
+        Email: "taro@example.com",
+      },
+    });
+  });
+
+  it("renders both cards inline with download links", async () => {
+    const res = await call("/preview/haruharu");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("text/html; charset=utf-8");
+
+    const html = await res.text();
+    expect(html).toContain("山田 太郎");
+    // both card SVGs embedded
+    expect(html.match(/<svg /g)?.length).toBeGreaterThanOrEqual(2);
+    expect(html).toContain("SCAN TO CONNECT"); // back card present
+    // download links point at the attachment endpoints
+    expect(html).toContain('href="/generate/haruharu" download');
+    expect(html).toContain('href="/generate/haruharu/back" download');
+    // QR target uses the request origin
+    expect(html).toContain("https://qr.test/p/haruharu");
+  });
+
+  it("returns 404 for an unknown id", async () => {
+    const res = await call("/preview/nobody");
+    expect(res.status).toBe(404);
   });
 });
 
