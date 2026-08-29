@@ -29,6 +29,5 @@ DEFAULT_REDIRECT_URL = "https://github.com/Kawamoto24e1058"
 REDIRECT_STATUS = "302"
 # エッジキャッシュのTTL(秒)。0 でキャッシュ無効(毎回Notionへ)
 CACHE_TTL_SECONDS = "45"
-# 裏面QRに埋め込む公開URLの基点(例: "https://qr.tech-club.dev")。
-# 空ならリクエストのオリジンを使用する
-PUBLIC_BASE_URL = ""
+# 裏面QRに埋め込む公開URLの基点。空ならリクエストのオリジンを使用する
+PUBLIC_BASE_URL = "https://tech-qr.momotech.workers.dev"
