@@ -1,0 +1,29 @@
+{
+  "name": "tech-qr",
+  "version": "1.0.0",
+  "private": true,
+  "description": "テック部 名刺QRコード用 動的リダイレクトシステム (Cloudflare Workers + Notion CMS)",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "start": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "cf-typegen": "wrangler types",
+    "embed-logo": "node scripts/embed-logo.mjs",
+    "postinstall": "wrangler types"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@types/node": "^26.4.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.127.1"
+  },
+  "dependencies": {
+    "uqr": "^0.1.3"
+  }
+}

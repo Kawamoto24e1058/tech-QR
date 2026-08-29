@@ -1,0 +1,25 @@
+# ローカル開発用の環境変数テンプレート
+# このファイルを `.dev.vars` にコピーして値を埋めてください（.dev.vars は Git 管理外）。
+#
+#   cp .dev.vars.example .dev.vars
+
+# Notion Internal Integration Token
+# https://www.notion.so/my-integrations で発行。"ntn_" もしくは "secret_" で始まる
+NOTION_API_KEY="ntn_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Notion Database ID（32文字の英数字。ダッシュ有無どちらでも可）
+# データベースを開いた URL の /xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?v=... 部分
+NOTION_DATABASE_ID="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# 未定義パス（/ など）へアクセスされた時のフォールバックリダイレクト先
+DEFAULT_REDIRECT_URL="https://github.com/Kawamoto24e1058"
+
+# リダイレクトのステータスコード（"302" または "307"）
+REDIRECT_STATUS="302"
+
+# エッジキャッシュの TTL（秒）。0 にするとキャッシュ無効（毎リクエスト Notion へ）
+CACHE_TTL_SECONDS="45"
+
+# 裏面QRに埋め込む公開URLの基点（例: https://qr.tech-club.dev）。
+# 空ならローカル開発時は http://localhost:8787 が使われる
+PUBLIC_BASE_URL=""

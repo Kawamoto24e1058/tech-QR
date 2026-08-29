@@ -1,0 +1,34 @@
+# ─────────────────────────────────────────────────────────────
+#  tech-QR : 名刺QRコード用 動的リダイレクトシステム
+# ─────────────────────────────────────────────────────────────
+name = "tech-qr"
+main = "src/index.ts"
+compatibility_date = "2025-08-01"
+
+# workers.dev のサブドメインで公開する場合は true
+workers_dev = true
+
+# 独自ドメイン(例: qr.example.com)を使う場合は下記を有効化
+# routes = [
+#   { pattern = "qr.example.com", custom_domain = true }
+# ]
+
+[observability]
+enabled = true
+
+# ─────────────────────────────────────────────────────────────
+#  環境変数 (機密でない値のみここに置く)
+#  機密値 (NOTION_API_KEY) は `wrangler secret put` で登録する
+# ─────────────────────────────────────────────────────────────
+[vars]
+# Notion Database ID (32文字。ダッシュ有無どちらでも可)
+NOTION_DATABASE_ID = "767b78b9872e4fc48bfc0fbae8bc7888"
+# 未定義パスへのアクセス時のフォールバック先
+DEFAULT_REDIRECT_URL = "https://github.com/Kawamoto24e1058"
+# リダイレクトのステータスコード ("302" または "307")
+REDIRECT_STATUS = "302"
+# エッジキャッシュのTTL(秒)。0 でキャッシュ無効(毎回Notionへ)
+CACHE_TTL_SECONDS = "45"
+# 裏面QRに埋め込む公開URLの基点(例: "https://qr.tech-club.dev")。
+# 空ならリクエストのオリジンを使用する
+PUBLIC_BASE_URL = ""

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+*.log
+.DS_Store
+coverage/
+
+# `wrangler types` で生成（postinstall / cf-typegen で再生成される）
+worker-configuration.d.ts
