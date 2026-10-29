@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildRows, detectColumns, markDuplicates, readCsv, readTable, RosterError } from "../src/roster";
+import { buildRows, detectColumns, findHeaderRow, markDuplicates, readCsv, readTable, RosterError } from "../src/roster";
 import { isOfficer } from "../src/notion";
 import { makeXlsx } from "./helpers/make-xlsx";
 
@@ -85,5 +85,55 @@ describe("buildRows", () => {
     const dup = buildRows([head, ["A", "", "", "x1@andrew.ac.jp", "", "", ""], ["B", "", "", "x1@andrew.ac.jp", "", "", ""]], detectColumns(head), ROLES);
     markDuplicates(dup);
     expect(dup.every((r) => r.problems.join().includes("重なって"))).toBe(true);
+  });
+});
+
+describe("申請書形式の名簿（上にタイトル・宛名、途中に別の表）", () => {
+  const table = [
+    ["学生団体構成員名簿"],
+    [],
+    ["", "役職", "氏名", "フリガナ", "携帯番号"],
+    ["", "顧問", "先生 太郎", "センセイ　タロウ", "090-0000-0000"],
+    [],
+    ["", "", "数字もカタカナも全て全角でお願いします。"],
+    ["", "役職", "氏名", "フリガナ", "学籍番号", "携帯番号"],
+    ["1", "部長", "川本 晴春", "カワモト　ハル", "２４Ｅ１０５８", "090-1111-1111"],
+    ["2", "副部長\n会計\n文サ\n渉外", "田中 次郎", "タナカ　ジロウ", "24J0001", "090-2222-2222"],
+    ["3", "文サ\n渉外", "新田 未来", "ニッタ　ミライ", "25J0002", ""],
+    ["4", "", "愛甲瑞希", "アイコウ　ミズキ", "25E0003", ""],
+  ];
+
+  it("finds the header row of the member table (the one with 学籍番号), not the title or the first table", () => {
+    expect(findHeaderRow(table)).toBe(6);
+  });
+
+  it("reads student numbers as IDs (full-width digits ok), ignores phone numbers, and keeps real row numbers", () => {
+    const h = findHeaderRow(table);
+    const map = detectColumns(table[h]);
+    expect(map).toMatchObject({ role: 1, nameJp: 2, id: 4 });
+    expect(map.email).toBe(-1);
+    const rows = buildRows(table, map, ROLES, h);
+    expect(rows.map((r) => [r.line, r.id, r.nameJp])).toEqual([
+      [8, "24e1058", "川本 晴春"],
+      [9, "24j0001", "田中 次郎"],
+      [10, "25j0002", "新田 未来"],
+      [11, "25e0003", "愛甲瑞希"],
+    ]);
+    expect(JSON.stringify(rows)).not.toContain("090-");
+  });
+
+  it("uses the first registered role when a cell lists several, and reports the others", () => {
+    const h = findHeaderRow(table);
+    const rows = buildRows(table, detectColumns(table[h]), ROLES, h);
+    expect(rows[1]).toMatchObject({ role: "副部長", roleExtra: "会計・文サ・渉外", problems: [] });
+    expect(rows[2].role).toBe("");
+    expect(rows[2].problems.join()).toContain("未登録の役職「文サ・渉外」");
+    expect(rows[3]).toMatchObject({ role: "", roleRaw: "", problems: [] });
+  });
+
+  it("keeps blank rows when reading .xlsx so row numbers match Excel", async () => {
+    const t = await readTable(await makeXlsx([["タイトル"], [], ["氏名", "メール"], ["山田", "x@andrew.ac.jp"]]));
+    expect(t.length).toBe(4);
+    expect(findHeaderRow(t)).toBe(2);
   });
 });

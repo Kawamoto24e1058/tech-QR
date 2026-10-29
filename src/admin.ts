@@ -11,7 +11,7 @@
 import { buildAdminPage, buildLoginPage, buildNoPasswordPage } from "./admin-page";
 import { buildBackCard, buildFrontCard, type CardFields } from "./card-template";
 import { FontError } from "./fonts";
-import { buildRows, detectColumns, FIELD_LABELS, FIELDS, markDuplicates, MAX_FILE_BYTES, MAX_ROWS, readTable, RosterError, type Mapping } from "./roster";
+import { buildRows, detectColumns, FIELD_LABELS, findHeaderRow, FIELDS, markDuplicates, MAX_FILE_BYTES, MAX_ROWS, readTable, RosterError, type Mapping } from "./roster";
 import { parseSettings } from "./card-settings";
 import { invalidateMember, invalidateSettings } from "./lookup";
 import {
@@ -216,10 +216,14 @@ async function parseRoster(request: Request, env: Env): Promise<Response> {
     console.error("roster read failed", { error: String(err) });
     return json({ error: "名簿を読み込めませんでした。.xlsx か CSV か確認してください。" }, 422);
   }
-  if (table.length < 2) return json({ error: "データの行がありません（1 行目は見出し、2 行目から人の情報にしてください）" }, 422);
+  // 見出しの行。申請書のように上にタイトルがある名簿は自動で探す。画面で選び直したときは header（1 始まりの行番号）で上書き
+  let headerRow = findHeaderRow(table);
+  const hq = Number(new URL(request.url).searchParams.get("header"));
+  if (Number.isInteger(hq) && hq >= 1 && hq <= table.length) headerRow = hq - 1;
+  if (table.length < headerRow + 2) return json({ error: "データの行がありません（見出しの次の行から 1 人ずつにしてください）" }, 422);
 
   // 列の対応づけ。画面で選び直したときは map（項目=列番号の JSON）で上書きする
-  const headers = table[0].map((h) => String(h ?? "").trim());
+  const headers = (table[headerRow] ?? []).map((h) => String(h ?? "").trim());
   const mapping: Mapping = detectColumns(headers);
   const override = new URL(request.url).searchParams.get("map");
   if (override) {
@@ -235,7 +239,7 @@ async function parseRoster(request: Request, env: Env): Promise<Response> {
   }
 
   const [{ roles }, members] = await Promise.all([getRoles(env), listMembersFull(env)]);
-  const rows = buildRows(table, mapping, roles);
+  const rows = buildRows(table, mapping, roles, headerRow);
   markDuplicates(rows);
   const byId = new Map(members.map((m) => [m.id, m]));
   return json({
@@ -245,8 +249,9 @@ async function parseRoster(request: Request, env: Env): Promise<Response> {
     fields: FIELDS,
     roles,
     plain: PLAIN_ROLES,
-    total: table.length - 1,
-    truncated: table.length - 1 > MAX_ROWS,
+    headerRow: headerRow + 1,
+    total: table.length - headerRow - 1,
+    truncated: table.length - headerRow - 1 > MAX_ROWS,
     rows: rows.map((r) => {
       const cur = byId.get(r.id);
       return { ...r, exists: !!cur, currentName: cur?.fields.nameJp ?? "" };

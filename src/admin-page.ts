@@ -1017,13 +1017,16 @@ const JS = String.raw`
     file.arrayBuffer().then(function (buf) { S.imp = { name: file.name, buf: buf, parsed: null, rows: [], map: null, result: null }; return parseRoster(null); })
       .catch(function (e) { S.imp = null; renderImport(); toast(e.message, 'err'); });
   }
-  function parseRoster(map) {
-    var url = '/admin/api/import/parse' + (map ? '?map=' + encodeURIComponent(JSON.stringify(map)) : '');
+  function parseRoster(map, header) {
+    var q = [];
+    if (map) q.push('map=' + encodeURIComponent(JSON.stringify(map)));
+    if (header) q.push('header=' + header);
+    var url = '/admin/api/import/parse' + (q.length ? '?' + q.join('&') : '');
     return fetch(url, { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: S.imp.buf }).then(function (r) {
       if (r.status === 401) { location.reload(); throw new Error('unauthorized'); }
       return r.json().catch(function () { return {}; }).then(function (j) {
         if (!r.ok) throw new Error(j.error || ('エラー (' + r.status + ')'));
-        S.imp.parsed = j; S.imp.map = j.mapping;
+        S.imp.parsed = j; S.imp.map = j.mapping; S.imp.header = j.headerRow;
         S.imp.rows = j.rows.map(function (r) {
           r.roleOk = !(r.roleRaw && S.plain.indexOf(r.roleRaw) < 0 && !r.role);
           r.include = true; r.card = !!r.card; return r;
@@ -1062,16 +1065,21 @@ const JS = String.raw`
     var m = S.imp.map, need = m.nameJp < 0 && m.surname < 0 || (m.id < 0 && m.email < 0);
     var det = mk('details'); if (need) det.open = true;
     det.appendChild(mk('summary', '', '列の対応' + (need ? '（氏名か ID が見つかりません。選んでください）' : '（自動で判定しました。違っていれば変更できます）')));
+    var hw = mk('div'); hw.style.marginTop = '14px';
+    var hl = mk('label', '', '見出しの行（上にタイトルなどがある名簿用。自動で探しています）'); hl.style.cssText = 'display:block;font-size:12.5px;color:var(--dim);font-weight:600;margin-bottom:4px';
+    var hi = mk('input', 'in'); hi.type = 'number'; hi.min = '1'; hi.value = String(S.imp.header); hi.style.cssText = 'width:120px;min-height:40px;padding:7px 12px';
+    hi.onchange = function () { var n = Number(hi.value); if (n >= 1) parseRoster(null, n).catch(function (e) { toast(e.message, 'err'); }); };
+    hw.appendChild(hl); hw.appendChild(hi);
     var g = mk('div', 'mapgrid');
     P.fields.forEach(function (f) {
       var w = mk('div'); w.appendChild(mk('label', '', esc(P.labels[f])));
       var sel = mk('select', 'in'); sel.appendChild(new Option('（使わない）', '-1'));
       P.headers.forEach(function (h, i) { sel.appendChild(new Option((h || '（見出しなし）') + '  ［' + (i + 1) + ' 列目］', String(i))); });
       sel.value = String(m[f]);
-      sel.onchange = function () { var nm = clone(S.imp.map); nm[f] = Number(sel.value); parseRoster(nm).catch(function (e) { toast(e.message, 'err'); }); };
+      sel.onchange = function () { var nm = clone(S.imp.map); nm[f] = Number(sel.value); parseRoster(nm, S.imp.header).catch(function (e) { toast(e.message, 'err'); }); };
       w.appendChild(sel); g.appendChild(w);
     });
-    det.appendChild(g); b.appendChild(det);
+    det.appendChild(hw); det.appendChild(g); b.appendChild(det);
 
     if (P.truncated) b.appendChild(mk('div', 'note', '行が多いため、先頭の 500 人だけ表示しています。残りは名簿を分けて取り込んでください。'));
 
@@ -1119,6 +1127,7 @@ const JS = String.raw`
       el.tr.className = r.include ? '' : 'skip';
       el.cS.innerHTML = probs.length ? '<span class="bad">' + probs.map(esc).join('<br>') + '</span>'
         : '<span class="tag ' + (exists ? 'fwd' : 'on') + '">' + (exists ? '更新' : '新規') + '</span>' + (auto ? '<span class="cap">役職あり→名刺を作る</span>' : (r.card ? '<span class="cap">名刺希望</span>' : '<span class="cap">名刺なし</span>')) +
+          (r.roleExtra ? '<div class="cap">他の役職: ' + esc(r.roleExtra) + '（名刺には「' + esc(r.role) + '」だけ載ります）</div>' : '') +
           (exists && r.include ? '<div class="cap">既存の「' + esc((S.members.filter(function (m) { return m.id === r.id.trim(); })[0] || {}).nameJp || '') + '」に上書き（名簿が空欄の項目は今のまま）</div>' : '');
       if (probs.length) n.bad++;
       if (r.include) { n.inc++; if (exists) n.update++; else n.create++; if (auto || r.card) n.card++; }

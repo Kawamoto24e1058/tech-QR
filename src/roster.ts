@@ -72,7 +72,7 @@ export function readCsv(textIn: string): string[][] {
     row.push(cell);
     rows.push(row);
   }
-  return rows.filter((r) => r.some((c) => c.trim() !== ""));
+  return rows;
 }
 
 /* ── .xlsx（ZIP + XML）───────────────────────────────── */
@@ -197,9 +197,9 @@ async function readXlsx(bytes: Uint8Array): Promise<string[][]> {
   if (sst) for (const m of sst.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)) shared.push(textRuns(m[1]));
 
   const rows: string[][] = [];
-  for (const rm of sheet.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)) {
+  for (const rm of sheet.matchAll(/<row\b([^>]*)>([\s\S]*?)<\/row>/g)) {
     const row: string[] = [];
-    for (const cm of rm[1].matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+    for (const cm of rm[2].matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
       const body = cm[2] ?? "";
       const ref = attr(cm[1], "r");
       const type = attr(cm[1], "t");
@@ -211,10 +211,13 @@ async function readXlsx(bytes: Uint8Array): Promise<string[][]> {
       if (ref) row[colIndex(ref)] = value;
       else row.push(value);
     }
-    rows.push(Array.from(row, (c) => c ?? ""));
-    if (rows.length > MAX_ROWS + 50) break;
+    // 空の行は XML に出てこないことがある。行番号（r）どおりの位置に置いて、Excel の行番号と合わせる
+    const no = Number(attr(rm[1], "r")) || rows.length + 1;
+    while (rows.length < no - 1) rows.push([]);
+    rows[no - 1] = Array.from(row, (c) => c ?? "");
+    if (rows.length > MAX_ROWS + 200) break;
   }
-  return rows.filter((r) => r.some((c) => c.trim() !== ""));
+  return rows;
 }
 
 /* ── 列の推測 ─────────────────────────────────────────── */
@@ -268,6 +271,25 @@ export function detectColumns(headers: string[]): Mapping {
   return m;
 }
 
+/**
+ * 見出しの行（0 始まり）を探す。申請書のように上にタイトルや宛名がある名簿でも、最初の 40 行のうち
+ * 「氏名」「学籍番号」「役職」など見出しらしい言葉がいちばん多い行を見出しとみなす（同点は上の行）。見つからなければ 0
+ */
+export function findHeaderRow(table: string[][]): number {
+  let best = 0;
+  let bestScore = 0;
+  table.slice(0, 40).forEach((row, i) => {
+    const m = detectColumns(row.map((c) => String(c ?? "")));
+    const hasWho = m.nameJp >= 0 || m.surname >= 0 || m.id >= 0 || m.email >= 0;
+    const score = FIELDS.filter((f) => m[f] >= 0).length;
+    if (hasWho && score >= 2 && score > bestScore) {
+      best = i;
+      bestScore = score;
+    }
+  });
+  return best;
+}
+
 /* ── 行 → メンバー ────────────────────────────────────── */
 
 /** メールのこのドメインのときだけ、@ より前を ID にする */
@@ -281,8 +303,10 @@ export interface RosterRow {
   nameEn: string;
   /** 登録済みの肩書き（なければ ""） */
   role: string;
-  /** 名簿に書かれていた役職（登録済みでない場合の確認用） */
+  /** 名簿に書かれていた役職（複数なら「・」でつないだもの。登録済みでない場合の確認用） */
   roleRaw: string;
+  /** 役職が複数書かれていたときの、名刺に使わなかった分（例: 副部長・会計 → 「会計」） */
+  roleExtra: string;
   email: string;
   githubId: string;
   xId: string;
@@ -297,12 +321,12 @@ const clean = (s: string | undefined) => (s ?? "").normalize("NFKC").replace(/\s
 /** 日本語の氏名は全角のスペースや詰め書きをそろえる */
 const cleanName = (s: string | undefined) => (s ?? "").replace(/[\s　]+/g, " ").trim();
 
-export function buildRows(table: string[][], map: Mapping, roles: Role[]): RosterRow[] {
+export function buildRows(table: string[][], map: Mapping, roles: Role[], headerRow = 0): RosterRow[] {
   const cell = (r: string[], f: RosterField) => (map[f] >= 0 ? (r[map[f]] ?? "") : "");
   const roleByNorm = new Map(roles.map((r) => [clean(r.jp), r.jp]));
   const out: RosterRow[] = [];
 
-  table.slice(1, MAX_ROWS + 1).forEach((r, k) => {
+  table.slice(headerRow + 1, headerRow + 1 + MAX_ROWS).forEach((r, k) => {
     const problems: string[] = [];
     const email = clean(cell(r, "email")).replace(/^mailto:/i, "");
     let nameJp = cleanName(cell(r, "nameJp"));
@@ -314,20 +338,25 @@ export function buildRows(table: string[][], map: Mapping, roles: Role[]): Roste
     if (!id) problems.push("ID を決められません（名簿に ID 列がなく、メールも @" + ID_EMAIL_DOMAIN + " ではありません）。下で入力してください");
     else if (!ID_PATTERN.test(id)) problems.push("ID に使えない文字が含まれています");
 
-    const roleRaw = clean(cell(r, "role"));
-    let role = "";
-    if (roleRaw && !PLAIN_ROLES.includes(roleRaw)) {
-      role = roleByNorm.get(roleRaw) ?? "";
-      if (!role) problems.push(`未登録の役職「${roleRaw}」です。下で選ぶか、「肩書き」タブで追加してください`);
-    }
+    // 役職は 1 つのセルに複数（改行・「、」「・」区切り）書かれていることがある。名刺には、登録済みの先頭の 1 つを使う
+    const tokens = cell(r, "role")
+      .split(/[\n\r、,，・／/;；]+/)
+      .map(clean)
+      .filter((t) => t && !PLAIN_ROLES.includes(t));
+    const found = tokens.map((t) => roleByNorm.get(t)).find((x): x is string => !!x) ?? "";
+    const roleRaw = tokens.join("・");
+    const roleExtra = found ? tokens.filter((t) => roleByNorm.get(t) !== found).join("・") : "";
+    if (tokens.length && !found) problems.push(`未登録の役職「${roleRaw}」です。下で選ぶか、「肩書き」タブで追加してください`);
+    const role = found;
 
     out.push({
-      line: k + 2,
+      line: headerRow + k + 2,
       id,
       nameJp,
       nameEn: clean(cell(r, "nameEn")),
       role,
       roleRaw,
+      roleExtra,
       email,
       githubId: normalizeHandle(clean(cell(r, "githubId")), ["github.com"]),
       xId: normalizeHandle(clean(cell(r, "xId")), ["x.com", "twitter.com"]),
