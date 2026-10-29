@@ -47,9 +47,12 @@ const FONT_STYLE = `<style><![CDATA[
     .mo { font-family: "Courier New", Courier, "SFMono-Regular", Menlo, monospace; }
   ]]></style>`;
 
-const LOGO_SYMBOL = `<symbol id="logo" viewBox="0 0 ${LOGO_WIDTH} ${LOGO_HEIGHT}" preserveAspectRatio="xMidYMid meet">
-    <image href="${LOGO_DATA_URI}" width="${LOGO_WIDTH}" height="${LOGO_HEIGHT}"/>
+/** logoHref を渡すと base64 埋め込みの代わりにその URL を参照する（エディタ用の軽量描画） */
+function logoSymbol(logoHref: string = LOGO_DATA_URI): string {
+  return `<symbol id="logo" viewBox="0 0 ${LOGO_WIDTH} ${LOGO_HEIGHT}" preserveAspectRatio="xMidYMid meet">
+    <image href="${logoHref}" width="${LOGO_WIDTH}" height="${LOGO_HEIGHT}"/>
   </symbol>`;
+}
 
 const LOGO_INVERT_FILTER = `<filter id="logo-invert" color-interpolation-filters="sRGB">
     <feColorMatrix type="matrix" values="-1 0 0 0 1  0 -1 0 0 1  0 0 -1 0 1  0 0 0 1 0"/>
@@ -95,23 +98,40 @@ const CONTACT_ICONS: Record<string, string> = {
  *  公開 API
  * ──────────────────────────────────────────────────────────── */
 
-export function buildFrontCard(f: CardFields, layout: CardLayout = DEFAULT_LAYOUT): string {
-  return renderSide("front", f, "", layout);
+export interface RenderOpts {
+  /** ロゴ画像の参照先。未指定なら base64 データURIを埋め込む（印刷入稿用の自己完結SVG） */
+  logoHref?: string;
+}
+
+export function buildFrontCard(
+  f: CardFields,
+  layout: CardLayout = DEFAULT_LAYOUT,
+  opts: RenderOpts = {},
+): string {
+  return renderSide("front", f, "", layout, opts);
 }
 
 export function buildBackCard(
   f: CardFields,
   qrTargetUrl: string,
   layout: CardLayout = DEFAULT_LAYOUT,
+  opts: RenderOpts = {},
 ): string {
-  return renderSide("back", f, qrTargetUrl, layout);
+  return renderSide("back", f, qrTargetUrl, layout, opts);
 }
 
-function renderSide(side: CardSide, f: CardFields, qrUrl: string, layout: CardLayout): string {
+function renderSide(
+  side: CardSide,
+  f: CardFields,
+  qrUrl: string,
+  layout: CardLayout,
+  opts: RenderOpts,
+): string {
+  const symbol = logoSymbol(opts.logoHref);
   const defs =
     side === "back"
-      ? `${LOGO_INVERT_FILTER}\n    ${LOGO_SYMBOL}\n    ${FONT_STYLE}\n    ${BACK_DEFS}`
-      : `${LOGO_INVERT_FILTER}\n    ${LOGO_SYMBOL}\n    ${FONT_STYLE}`;
+      ? `${LOGO_INVERT_FILTER}\n    ${symbol}\n    ${FONT_STYLE}\n    ${BACK_DEFS}`
+      : `${LOGO_INVERT_FILTER}\n    ${symbol}\n    ${FONT_STYLE}`;
 
   const chrome = side === "back" ? BACK_CHROME : FRONT_CHROME;
   const body = Object.entries(layout[side])

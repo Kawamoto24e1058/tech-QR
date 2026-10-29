@@ -417,6 +417,74 @@ describe("layout editor", () => {
     expect(svg).not.toContain("<script>alert(1)</script>");
   });
 
+  it("GET /editor/layout also returns the defaults and whether a layout is saved", async () => {
+    await postJson("/editor/reset", {});
+    const first = (await (await call("/editor/layout")).json()) as { saved: boolean; defaults: any };
+    expect(first.saved).toBe(false);
+    expect(first.defaults.front.nameJp.x).toBe(46);
+
+    await postJson("/editor/layout", { front: { nameJp: { x: 80 } } });
+    const second = (await (await call("/editor/layout")).json()) as { saved: boolean };
+    expect(second.saved).toBe(true);
+  });
+
+  it("saving a layout identical to the defaults clears the KV entry", async () => {
+    await postJson("/editor/layout", { front: { nameJp: { x: 80 } } });
+    const { defaults } = (await (await call("/editor/layout")).json()) as { defaults: unknown };
+    await postJson("/editor/layout", defaults);
+    const after = (await (await call("/editor/layout")).json()) as { saved: boolean };
+    expect(after.saved).toBe(false);
+  });
+
+  it("editor preview references the logo by URL instead of embedding base64", async () => {
+    const svg = await (await postJson("/editor/preview", { side: "front", layout: {} })).text();
+    expect(svg).toContain('href="/editor/logo.png"');
+    expect(svg).not.toContain("data:image/png;base64");
+    expect(svg.length).toBeLessThan(40_000);
+    expect(svg).toContain('data-el="nameJp"'); // elements are addressable by the editor
+  });
+
+  it("editor preview can render a real member and a long-name sample", async () => {
+    stubNotion({ haruharu: { Name_JP: "川本 晴春", Role: "部長", Role_EN: "President" } });
+    const real = await (await postJson("/editor/preview", { side: "front", layout: {}, id: "haruharu" })).text();
+    expect(real).toContain("川本 晴春");
+
+    const long = await (await postJson("/editor/preview", { side: "front", layout: {}, id: "__sample_long" })).text();
+    expect(long).toContain("一ノ瀬");
+
+    const back = await (await postJson("/editor/preview", { side: "back", layout: {}, id: "haruharu" })).text();
+    expect(back).toContain("/p/haruharu"); // QR url shown for the chosen member
+  });
+
+  it("editor preview rejects a malformed member id", async () => {
+    const res = await postJson("/editor/preview", { side: "front", layout: {}, id: "../etc" });
+    expect(res.status).toBe(400);
+  });
+
+  it("GET /editor/members lists Notion members", async () => {
+    stubNotion({ haruharu: { Name_JP: "川本 晴春", active: true } });
+    const res = await call("/editor/members");
+    expect(res.status).toBe(200);
+    const list = (await res.json()) as Array<{ id: string; name: string }>;
+    expect(list).toEqual([{ id: "haruharu", name: "川本 晴春", active: true }]);
+  });
+
+  it("GET /editor/logo.png serves a cacheable PNG", async () => {
+    const res = await call("/editor/logo.png");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("image/png");
+    expect(res.headers.get("Cache-Control")).toContain("max-age");
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expect([...bytes.slice(1, 4)]).toEqual([80, 78, 71]); // "PNG"
+  });
+
+  it("the editor page ships its client script without template-literal leftovers", async () => {
+    const html = await (await call("/editor")).text();
+    expect(html).toContain('id="board"');
+    expect(html).toContain("function resizeMove");
+    expect(html).not.toContain("${");
+  });
+
   it("POST /editor/reset restores defaults", async () => {
     await postJson("/editor/layout", { front: { nameJp: { x: 999 } } });
     await postJson("/editor/reset", {});

@@ -5,8 +5,10 @@
  *   GET  /preview           -> メンバー一覧(HTML)
  *   GET  /preview/:id       -> 表裏の名刺を画面表示 + そこからSVGダウンロード(HTML)
  *   GET  /editor            -> ビジュアルレイアウトエディタ(HTML)
- *   GET  /editor/layout     -> 現在のレイアウトJSON
- *   POST /editor/preview    -> 作業中レイアウト+サンプルで SVG を返す
+ *   GET  /editor/layout     -> 現在のレイアウトJSON + デフォルト
+ *   GET  /editor/members    -> プレビュー用メンバー一覧(JSON)
+ *   GET  /editor/logo.png   -> エディタ描画用のロゴ画像(軽量プレビュー用)
+ *   POST /editor/preview    -> 作業中レイアウト+サンプル/実メンバーで SVG を返す
  *   POST /editor/layout     -> レイアウトを KV に保存
  *   POST /editor/reset      -> レイアウトをデフォルトに戻す
  *   GET /p/:id             -> Notion の ID(Title)=:id かつ Active=true のレコードの
@@ -24,7 +26,8 @@ import {
   type CardFields,
   type CardSide,
 } from "./card-template";
-import { buildEditorPage, SAMPLE_FIELDS } from "./editor";
+import { buildEditorPage, SAMPLE_FIELDS, SAMPLE_FIELDS_LONG } from "./editor";
+import { LOGO_DATA_URI } from "./logo";
 import { type CardLayout, DEFAULT_LAYOUT, resolveLayout } from "./layout";
 import { buildCardPreview, buildIndexPage, type MemberSummary } from "./preview";
 
@@ -58,7 +61,7 @@ export default {
 
     // ── エディタ API（POST）─────────────────────────────
     if (method === "POST" && pathname === "/editor/preview") {
-      return editorPreview(request);
+      return editorPreview(request, env);
     }
     if (method === "POST" && pathname === "/editor/layout") {
       return editorSaveLayout(request, env);
@@ -91,8 +94,27 @@ export default {
       return htmlResponse(buildEditorPage());
     }
     if (pathname === "/editor/layout") {
+      const saved = (await env.LAYOUT.get(LAYOUT_KEY).catch(() => null)) !== null;
       const layout = await loadLayout(env);
-      return Response.json({ layout }, { headers: { "Cache-Control": "no-store" } });
+      return Response.json(
+        { layout, defaults: DEFAULT_LAYOUT, saved },
+        { headers: { "Cache-Control": "no-store" } },
+      );
+    }
+    if (pathname === "/editor/members") {
+      try {
+        return Response.json(await fetchAllMembers(env), {
+          headers: { "Cache-Control": "no-store" },
+        });
+      } catch (err) {
+        console.error("fetchAllMembers failed", { error: String(err) });
+        return badGateway();
+      }
+    }
+    if (pathname === "/editor/logo.png") {
+      return new Response(logoPngBytes(), {
+        headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" },
+      });
     }
 
     // /preview : メンバー一覧
@@ -396,9 +418,9 @@ async function loadLayout(env: Env): Promise<CardLayout> {
   }
 }
 
-/** POST /editor/preview : 作業中レイアウト + サンプルデータで SVG を返す */
-async function editorPreview(request: Request): Promise<Response> {
-  let body: { side?: string; layout?: unknown };
+/** POST /editor/preview : 作業中レイアウトで SVG を描画（エディタ用の軽量版・ロゴは URL 参照） */
+async function editorPreview(request: Request, env: Env): Promise<Response> {
+  let body: { side?: string; layout?: unknown; id?: string };
   try {
     body = await request.json();
   } catch {
@@ -406,13 +428,47 @@ async function editorPreview(request: Request): Promise<Response> {
   }
   const side: CardSide = body.side === "back" ? "back" : "front";
   const layout = resolveLayout(body.layout);
+  const base = (env.PUBLIC_BASE_URL || new URL(request.url).origin).replace(/\/+$/, "");
+
+  // プレビューに使うデータ: サンプル / 長い名前のサンプル / 実メンバー(ID)
+  let fields = SAMPLE_FIELDS;
+  let qrId = "yamada";
+  if (body.id === "__sample_long") {
+    fields = SAMPLE_FIELDS_LONG;
+  } else if (typeof body.id === "string" && body.id && body.id !== "__sample") {
+    if (!ID_PATTERN.test(body.id)) {
+      return new Response("bad id", { status: 400 });
+    }
+    try {
+      const page = await fetchMemberById(body.id, env);
+      if (page) {
+        fields = toCardFields(page);
+        qrId = body.id;
+      }
+    } catch (err) {
+      console.error("editorPreview member fetch failed", { error: String(err) });
+      return badGateway();
+    }
+  }
+
+  const opts = { logoHref: "/editor/logo.png" };
   const svg =
     side === "back"
-      ? buildBackCard(SAMPLE_FIELDS, "https://tech-qr.example.com/p/yamada", layout)
-      : buildFrontCard(SAMPLE_FIELDS, layout);
+      ? buildBackCard(fields, `${base}/p/${qrId}`, layout, opts)
+      : buildFrontCard(fields, layout, opts);
   return new Response(svg, {
     headers: { "Content-Type": "image/svg+xml; charset=utf-8", "Cache-Control": "no-store" },
   });
+}
+
+let logoBytes: Uint8Array | null = null;
+/** LOGO_DATA_URI(base64) -> PNG バイト列（初回のみデコード） */
+function logoPngBytes(): Uint8Array {
+  if (!logoBytes) {
+    const bin = atob(LOGO_DATA_URI.slice(LOGO_DATA_URI.indexOf(",") + 1));
+    logoBytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  }
+  return logoBytes;
 }
 
 /** POST /editor/layout : レイアウトをサニタイズして KV に保存 */
@@ -424,7 +480,12 @@ async function editorSaveLayout(request: Request, env: Env): Promise<Response> {
     return new Response("bad json", { status: 400 });
   }
   const layout = resolveLayout(raw);
-  await env.LAYOUT.put(LAYOUT_KEY, JSON.stringify(layout));
+  // デフォルトと同一なら保存せず KV を空にする（将来 DEFAULT_LAYOUT を更新したとき追従できる）
+  if (JSON.stringify(layout) === JSON.stringify(DEFAULT_LAYOUT)) {
+    await env.LAYOUT.delete(LAYOUT_KEY);
+  } else {
+    await env.LAYOUT.put(LAYOUT_KEY, JSON.stringify(layout));
+  }
   return Response.json({ ok: true, layout }, { headers: { "Cache-Control": "no-store" } });
 }
 
