@@ -776,7 +776,15 @@ const JS = String.raw`
       if (used > 0) jp.title = '使用中のため名前は変更できません';
       jp.oninput = function () { r.jp = jp.value.trim(); refreshRoles(); };
       var en = mk('input', 'in en-in'); en.value = r.en; en.maxLength = 40; en.placeholder = 'e.g. Treasurer'; en.style.fontFamily = '"Courier New",monospace';
-      en.oninput = function () { r.en = en.value.trim(); refreshRoles(); };
+      en.oninput = function () { r.en = en.value.trim(); r.typed = true; refreshRoles(); };
+      jp.onchange = function () {
+        if (r.en || r.typed || !r.jp) return;
+        en.placeholder = '英訳しています…';
+        api('GET', '/admin/api/role-en?jp=' + encodeURIComponent(r.jp)).then(function (j) {
+          if (j.en && !r.en && !r.typed) { r.en = j.en; en.value = j.en; refreshRoles(); }
+          en.placeholder = j.en ? 'e.g. Treasurer' : '英語の表記を入力してください';
+        }).catch(function () { en.placeholder = 'e.g. Treasurer'; });
+      };
       var use = mk('span', 'use', used ? used + ' 人' : '—');
       var del = mk('button', 'btn sm danger', '削除'); del.type = 'button'; del.disabled = used > 0; if (used > 0) del.title = '使用中のため削除できません';
       del.onclick = function () { S.rdraft.splice(i, 1); drawRoleRows(); refreshRoles(); };
@@ -1187,7 +1195,6 @@ const JS = String.raw`
   }
 
   /* 名簿の役職と、肩書きの選択肢をそろえる（未登録の役職を英語の表記つきで追加 / 名簿にない役職を整理）*/
-  var ROLE_HINTS = { '文サ': 'Culture Circle Liaison', '渉外': 'External Relations', '書記': 'Secretary', '会計': 'Treasurer', '広報': 'Public Relations' };
   function rolesBox(P) {
     var names = P.unknownRoles || [], roster = P.rosterRoles || [];
     var removable = S.roles.filter(function (r) { return roster.indexOf(r.jp) < 0 && S.plain.indexOf(r.jp) < 0 && !(S.usage[r.jp] > 0); });
@@ -1201,7 +1208,7 @@ const JS = String.raw`
       names.forEach(function (n) {
         var r = mk('div', 'crow'); r.style.borderTop = '0';
         var nm = mk('span', 'nm', '<b>' + esc(n) + '</b>'); nm.style.flex = 'none'; nm.style.minWidth = '90px';
-        var en = mk('input', 'in'); en.value = ROLE_HINTS[n] || ''; en.placeholder = '英語の表記（例: Secretary）'; en.maxLength = 40; en.style.maxWidth = '320px';
+        var en = mk('input', 'in'); en.value = (P.roleSuggest && P.roleSuggest[n]) || ''; en.placeholder = '英語の表記（例: Secretary）'; en.maxLength = 40; en.style.maxWidth = '320px';
         r.appendChild(nm); r.appendChild(en); box.appendChild(r); rows.push({ jp: n, input: en });
       });
     }

@@ -39,3 +39,7 @@ namespace_id = "1001"
   [ratelimits.simple]
   limit = 5
   period = 60
+
+# 肩書きの英語表記を自動提案するための Workers AI（辞書にない役職だけ使う。無料枠内）
+[ai]
+binding = "AI"

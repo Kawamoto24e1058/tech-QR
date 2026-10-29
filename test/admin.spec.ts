@@ -741,3 +741,29 @@ describe("名刺の設定（表面に載せる項目）", () => {
     expect(svg).not.toContain('aria-label="taro@example.com"');
   });
 });
+
+describe("/admin/api/role-en", () => {
+  it("辞書の役職は英訳を返し、副〇〇は Vice を付ける", async () => {
+    const cookie = await login();
+    const get = async (jp: string) => (await (await api(cookie, "GET", `/admin/api/role-en?jp=${encodeURIComponent(jp)}`)).json()) as any;
+    expect((await get("会計")).en).toBe("Treasurer");
+    expect((await get("文サ")).en).toBe("Culture Circle Liaison");
+    expect((await get("副会計")).en).toBe("Vice Treasurer");
+    expect((await get("会 計")).source).toBe("dict");
+  });
+
+  it("辞書になければ AI に訳させ、使えない・変な答えのときは空を返す", async () => {
+    const cookie = await login();
+    const ask = (e: any) =>
+      req(`/admin/api/role-en?jp=${encodeURIComponent("謎の役")}`, { headers: { cookie } }, e).then((r) => r.json() as Promise<any>);
+    const ai = (response: string | Error) => ({ run: async () => { if (response instanceof Error) throw response; return { response }; } });
+    expect(await ask({ ...env, AI: ai("Mystery Officer\nThis means...") })).toEqual({ en: "Mystery Officer", source: "ai" });
+    expect((await ask({ ...env, AI: ai("謎の役員です") })).en).toBe("");
+    expect((await ask({ ...env, AI: ai(new Error("down")) })).en).toBe("");
+    expect((await ask({ ...env, AI: undefined })).en).toBe("");
+  });
+
+  it("ログインしていないと使えない", async () => {
+    expect((await req("/admin/api/role-en?jp=会計")).status).toBe(401);
+  });
+});

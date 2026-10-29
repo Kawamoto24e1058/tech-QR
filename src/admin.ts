@@ -13,6 +13,7 @@ import { buildBackCard, buildFrontCard, type CardFields } from "./card-template"
 import { FontError } from "./fonts";
 import { buildRows, detectColumns, FIELD_LABELS, findHeaderRow, FIELDS, markDuplicates, MAX_FILE_BYTES, MAX_ROWS, readTable, RosterError, type Mapping } from "./roster";
 import { parseSettings } from "./card-settings";
+import { suggestRoleEn } from "./role-en";
 import { invalidateMember, invalidateSettings } from "./lookup";
 import {
   archiveMember,
@@ -139,6 +140,10 @@ async function api(request: Request, env: Env, path: string, method: string): Pr
     }
   }
 
+  if (path === "/admin/api/role-en" && method === "GET") {
+    return json(await suggestRoleEn(new URL(request.url).searchParams.get("jp") ?? "", env));
+  }
+
   if (path === "/admin/api/roles") {
     if (method === "GET") return json({ ...(await rolesWithUsage(env)), plain: PLAIN_ROLES });
     if (method === "PUT") {
@@ -242,6 +247,9 @@ async function parseRoster(request: Request, env: Env): Promise<Response> {
   const rows = buildRows(table, mapping, roles, headerRow);
   markDuplicates(rows);
   const byId = new Map(members.map((m) => [m.id, m]));
+  const unknownRoles = [...new Set(rows.flatMap((r) => r.roleUnknown))];
+  const roleSuggest: Record<string, string> = {};
+  await Promise.all(unknownRoles.map(async (n) => void (roleSuggest[n] = (await suggestRoleEn(n, env)).en)));
   return json({
     headers,
     mapping,
@@ -250,7 +258,8 @@ async function parseRoster(request: Request, env: Env): Promise<Response> {
     roles,
     plain: PLAIN_ROLES,
     headerRow: headerRow + 1,
-    unknownRoles: [...new Set(rows.flatMap((r) => r.roleUnknown))],
+    unknownRoles,
+    roleSuggest,
     // 名簿に出てくる役職（出てきた順）。肩書きの選択肢を名簿に揃えるのに使う
     rosterRoles: [...new Set(rows.flatMap((r) => (r.roleRaw ? r.roleRaw.split("・") : [])))],
     total: table.length - headerRow - 1,
