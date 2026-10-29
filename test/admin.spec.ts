@@ -423,7 +423,7 @@ describe("/admin/api/preview", () => {
     expect(svg).toContain('aria-label="山田 太郎"');
     expect(svg).toContain('aria-label="President"');
     expect(svg).toContain('aria-label="github.com/octo"'); // URL を貼っても ID に直る
-    expect(svg).toContain('href="/assets/logo-black.png"');
+    expect(svg).toContain('href="/assets/logo.png"');
     expect(svg).toContain('viewBox="0 0 910 550"'); // 画面用は塗り足しなし
     expect(svg).not.toContain("<text");
     expect(svg).not.toContain("data:image/png;base64");
@@ -433,7 +433,7 @@ describe("/admin/api/preview", () => {
   it("renders the back card with the QR pointing at the draft id, and tolerates garbage input", async () => {
     const cookie = await login();
     const back = await (await api(cookie, "POST", "/admin/api/preview", { side: "back", member: member({ id: "kai" }) })).text();
-    expect(back).toContain('aria-label="qr.test/p/kai"');
+    expect(back).toContain('aria-label="/p/kai"');
 
     const junk = await api(cookie, "POST", "/admin/api/preview", { side: "front", member: { nameJp: 123, skills: "x", id: "bad id" } });
     expect(junk.status).toBe(200);

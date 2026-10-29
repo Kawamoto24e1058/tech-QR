@@ -161,7 +161,7 @@ async function previewCard(request: Request, env: Env): Promise<Response> {
   };
   const base = (env.PUBLIC_BASE_URL || new URL(request.url).origin).replace(/\/+$/, "");
   // 画面用: 仕上がりサイズ、ロゴは URL 参照で軽量に
-  const opts = { bleed: false, logoHref: "/assets/logo-black.png" };
+  const opts = { bleed: false, logoHref: "/assets/logo.png" };
   let svg: string;
   try {
     svg = b.side === "back" ? await buildBackCard(fields, `${base}/p/${id}`, opts) : await buildFrontCard(fields, opts);
