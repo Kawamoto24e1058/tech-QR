@@ -6,16 +6,10 @@
  * 名刺 SVG はダウンロード用の /generate エンドポイントと同じものを、
  * ここでは inline で埋め込んで表示する。
  */
-import { buildBackCard, buildFrontCard, escapeXml, type CardFields } from "./card-template";
-import { DEFAULT_LAYOUT, type CardLayout } from "./layout";
+import { buildBackCard, buildFrontCard, escapeXml } from "./card-template";
+import type { Member, MemberSummary } from "./notion";
 
 const esc = escapeXml;
-
-export interface MemberSummary {
-  id: string;
-  name: string;
-  active: boolean;
-}
 
 const BASE_CSS = `
   :root { color-scheme: dark; }
@@ -74,16 +68,16 @@ const INDEX_CSS = `${BASE_CSS}
 `;
 
 /** GET /preview/:id */
-export function buildCardPreview(
-  id: string,
-  f: CardFields,
-  baseUrl: string,
-  layout: CardLayout = DEFAULT_LAYOUT,
-): string {
+export function buildCardPreview(m: Member, baseUrl: string): string {
+  const id = m.id;
+  const f = m.fields;
   const qrUrl = `${baseUrl}/p/${id}`;
-  const front = buildFrontCard(f, layout);
-  const back = buildBackCard(f, qrUrl, layout);
+  const front = buildFrontCard(f);
+  const back = buildBackCard(f, qrUrl);
   const title = f.nameJp || f.nameEn || id;
+  const dest = m.targetUrl
+    ? `転送: <code>${esc(m.targetUrl)}</code>`
+    : `<a href="/profile/${esc(id)}">プロフィールページ</a>`;
 
   return `<!doctype html>
 <html lang="ja">
@@ -98,7 +92,7 @@ export function buildCardPreview(
   <a class="backlink" href="/preview">← メンバー一覧</a>
   <header>
     <h1>${esc(title)}<span class="id">${esc(id)}</span></h1>
-    <p class="muted">QR 転送先: <code>${esc(qrUrl)}</code></p>
+    <p class="muted">QR: <code>${esc(qrUrl)}</code> → ${dest}${m.active ? "" : "（Active が OFF のため 404）"}</p>
   </header>
 
   <section>
@@ -147,7 +141,7 @@ export function buildIndexPage(members: MemberSummary[]): string {
 <body>
 <div class="wrap">
   <h1>名刺プレビュー</h1>
-  <p class="muted">名前をクリックすると表裏の名刺を確認・ダウンロードできます（${members.length} 名）。 <a href="/editor">レイアウトを編集 →</a></p>
+  <p class="muted">名前をクリックすると表裏の名刺を確認・ダウンロードできます（${members.length} 名）。</p>
   ${body}
 </div>
 </body>

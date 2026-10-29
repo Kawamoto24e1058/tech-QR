@@ -1,492 +1,169 @@
 /**
- * tech-QR : Notion Database を管理画面(ヘッドレスCMS)にした Cloudflare Worker
+ * tech-QR : Notion を管理画面にした、名刺QRのリダイレクト + 名刺SVG生成 Worker
  *
- * ルーティング:
- *   GET  /preview           -> メンバー一覧(HTML)
- *   GET  /preview/:id       -> 表裏の名刺を画面表示 + そこからSVGダウンロード(HTML)
- *   GET  /editor            -> ビジュアルレイアウトエディタ(HTML)
- *   GET  /editor/layout     -> 現在のレイアウトJSON + デフォルト
- *   GET  /editor/members    -> プレビュー用メンバー一覧(JSON)
- *   GET  /editor/logo.png   -> エディタ描画用のロゴ画像(軽量プレビュー用)
- *   POST /editor/preview    -> 作業中レイアウト+サンプル/実メンバーで SVG を返す
- *   POST /editor/layout     -> レイアウトを KV に保存
- *   POST /editor/reset      -> レイアウトをデフォルトに戻す
- *   GET /p/:id             -> Notion の ID(Title)=:id かつ Active=true のレコードの
- *                             TargetURL へ 302/307 リダイレクト。該当なし -> 404
- *   GET /generate/:id       -> 名刺の表面SVGを生成し attachment で返す。該当なし -> 404
- *   GET /generate/:id/back  -> 名刺の裏面SVG(メンバー別QR入り)を生成し attachment で返す
- *   GET /health             -> 200 OK (疎通確認)
- *   その他                  -> DEFAULT_REDIRECT_URL へフォールバックリダイレクト
+ * 管理する場所は Notion の Database 1 か所だけ。メンバーが触れるのは「データ」で、
+ * 名刺の見た目は src/layout.ts に固定（組織で統一）。
+ *
+ *   GET /p/:id             QR の着地点。TargetURL が空 → プロフィールページ / あり → その URL へ転送
+ *   GET /profile/:id       プロフィールページ（転送先を設定していても常にこちらを表示）
+ *   GET /preview           メンバー一覧
+ *   GET /preview/:id       表裏の名刺を表示し、そこから SVG をダウンロード
+ *   GET /generate/:id      表面 SVG をダウンロード
+ *   GET /generate/:id/back 裏面 SVG（メンバー別 QR 入り）をダウンロード
+ *   GET /assets/logo.png   ロゴ画像（プロフィールページ用）
+ *   GET /health            疎通確認
+ *   その他                 DEFAULT_REDIRECT_URL へ転送
  */
-
-import {
-  buildBackCard,
-  buildFrontCard,
-  escapeXml,
-  type CardFields,
-  type CardSide,
-} from "./card-template";
-import { buildEditorPage, SAMPLE_FIELDS, SAMPLE_FIELDS_LONG } from "./editor";
-import { LOGO_DATA_URI } from "./logo";
-import { type CardLayout, DEFAULT_LAYOUT, resolveLayout } from "./layout";
-import { buildCardPreview, buildIndexPage, type MemberSummary } from "./preview";
-
-const LAYOUT_KEY = "layout:v1";
+import { logoPngBytes } from "./assets";
+import { buildBackCard, buildFrontCard, escapeXml } from "./card-template";
+import { getMember, ID_PATTERN, listMembers, type Member } from "./notion";
+import { buildCardPreview, buildIndexPage } from "./preview";
+import { buildProfilePage } from "./profile";
 
 /**
- * 環境変数 / シークレット。
- * - `NOTION_API_KEY` (secret): Notion Internal Integration Token
- * - `NOTION_DATABASE_ID` (var): Notion Database ID (32文字, ダッシュ有無可)
- * - `DEFAULT_REDIRECT_URL` (var): 未定義パスへアクセスされた時のフォールバック先
- * - `REDIRECT_STATUS` (var): "302" | "307" (未指定なら 302)
- * - `CACHE_TTL_SECONDS` (var): /p/:id のエッジキャッシュTTL秒。"0"/未指定でキャッシュ無効
- * - `PUBLIC_BASE_URL` (var): 裏面QRに埋め込む公開URLの基点。空ならリクエストのoriginを使用
- *
- * 実体の型は `wrangler types` が生成する `Cloudflare.Env` +
- * `worker-env.d.ts` のシークレット宣言。
+ * 環境変数 / シークレット（型は `wrangler types` 生成の Cloudflare.Env + worker-env.d.ts）
+ * - NOTION_API_KEY (secret) / NOTION_DATABASE_ID (var)
+ * - DEFAULT_REDIRECT_URL: 未定義パスのフォールバック先
+ * - REDIRECT_STATUS: "302" | "307"（既定 302）
+ * - CACHE_TTL_SECONDS: /p/:id と /profile/:id の Notion 参照キャッシュ秒。"0" で無効
+ * - PUBLIC_BASE_URL: 裏面QRに埋め込む公開URLの基点。空ならリクエストの origin
  */
 export type Env = Cloudflare.Env;
-
-const NOTION_API_BASE = "https://api.notion.com/v1";
-const NOTION_VERSION = "2022-06-28";
-
-/** ID プロパティに使える文字。SSRF / インジェクション回避のため厳しめに制限 */
-const ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const { pathname } = url;
-    const method = request.method;
 
-    // ── エディタ API（POST）─────────────────────────────
-    if (method === "POST" && pathname === "/editor/preview") {
-      return editorPreview(request, env);
-    }
-    if (method === "POST" && pathname === "/editor/layout") {
-      return editorSaveLayout(request, env);
-    }
-    if (method === "POST" && pathname === "/editor/reset") {
-      await env.LAYOUT.delete(LAYOUT_KEY).catch(() => {});
-      return Response.json({ ok: true }, { headers: { "Cache-Control": "no-store" } });
-    }
-
-    // GET / HEAD 以外は許可しない
-    if (method !== "GET" && method !== "HEAD") {
+    if (request.method !== "GET" && request.method !== "HEAD") {
       return new Response("Method Not Allowed", {
         status: 405,
-        headers: { Allow: "GET, HEAD, POST", "Content-Type": "text/plain; charset=utf-8" },
+        headers: { Allow: "GET, HEAD", "Content-Type": "text/plain; charset=utf-8" },
       });
     }
 
-    // /health : 疎通確認
     if (pathname === "/health") {
-      return Response.json(
-        { status: "ok", time: new Date().toISOString() },
-        { headers: { "Cache-Control": "no-store" } },
-      );
+      return Response.json({ status: "ok", time: new Date().toISOString() }, noStore());
     }
 
-    const base = (env.PUBLIC_BASE_URL || url.origin).replace(/\/+$/, "");
-
-    // /editor : ビジュアルレイアウトエディタ
-    if (pathname === "/editor" || pathname === "/editor/") {
-      return htmlResponse(buildEditorPage());
-    }
-    if (pathname === "/editor/layout") {
-      const saved = (await env.LAYOUT.get(LAYOUT_KEY).catch(() => null)) !== null;
-      const layout = await loadLayout(env);
-      return Response.json(
-        { layout, defaults: DEFAULT_LAYOUT, saved },
-        { headers: { "Cache-Control": "no-store" } },
-      );
-    }
-    if (pathname === "/editor/members") {
-      try {
-        return Response.json(await fetchAllMembers(env), {
-          headers: { "Cache-Control": "no-store" },
-        });
-      } catch (err) {
-        console.error("fetchAllMembers failed", { error: String(err) });
-        return badGateway();
-      }
-    }
-    if (pathname === "/editor/logo.png") {
+    if (pathname === "/assets/logo.png") {
       return new Response(logoPngBytes(), {
         headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" },
       });
     }
 
-    // /preview : メンバー一覧
-    if (pathname === "/preview" || pathname === "/preview/") {
-      let members: MemberSummary[];
-      try {
-        members = await fetchAllMembers(env);
-      } catch (err) {
-        console.error("fetchAllMembers failed", { error: String(err) });
-        return badGateway();
+    const base = (env.PUBLIC_BASE_URL || url.origin).replace(/\/+$/, "");
+
+    try {
+      // ── QR の着地点 ─────────────────────────────────
+      const p = pathname.match(/^\/p\/([^/]+)\/?$/);
+      if (p) {
+        const id = decodeURIComponent(p[1]);
+        const member = ID_PATTERN.test(id) ? await lookup(id, env, ctx) : null;
+        if (!member || !member.active) return notFound(id);
+        // 転送先が設定されていればそこへ、なければプロフィールページ
+        if (isSafeHttpUrl(member.targetUrl)) return redirect(member.targetUrl, env);
+        return html(buildProfilePage(member));
       }
-      return htmlResponse(buildIndexPage(members));
+
+      const prof = pathname.match(/^\/profile\/([^/]+)\/?$/);
+      if (prof) {
+        const id = decodeURIComponent(prof[1]);
+        const member = ID_PATTERN.test(id) ? await lookup(id, env, ctx) : null;
+        if (!member || !member.active) return notFound(id);
+        return html(buildProfilePage(member));
+      }
+
+      // ── 名刺プレビュー / ダウンロード ────────────────
+      if (pathname === "/preview" || pathname === "/preview/") {
+        return html(buildIndexPage(await listMembers(env)));
+      }
+
+      const prev = pathname.match(/^\/preview\/([^/]+)\/?$/);
+      if (prev) {
+        const id = decodeURIComponent(prev[1]);
+        const member = ID_PATTERN.test(id) ? await getMember(id, env) : null;
+        return member ? html(buildCardPreview(member, base)) : notFound(id);
+      }
+
+      const gen = pathname.match(/^\/generate\/([^/]+?)(?:\.svg)?(\/back)?(?:\.svg)?\/?$/);
+      if (gen) {
+        const id = decodeURIComponent(gen[1]);
+        const member = ID_PATTERN.test(id) ? await getMember(id, env) : null;
+        if (!member) return notFound(id);
+        return gen[2]
+          ? svgDownload(buildBackCard(member.fields, `${base}/p/${id}`), `${id}-card-back`)
+          : svgDownload(buildFrontCard(member.fields), `${id}-card-front`);
+      }
+    } catch (err) {
+      console.error("request failed", { pathname, error: String(err) });
+      return badGateway();
     }
 
-    // /preview/:id : 名刺プレビュー
-    const previewMatch = pathname.match(/^\/preview\/([^/]+)\/?$/);
-    if (previewMatch) {
-      const id = decodeURIComponent(previewMatch[1]);
-      if (!ID_PATTERN.test(id)) {
-        return notFound(id);
-      }
-      let page: NotionPage | null;
-      try {
-        page = await fetchMemberById(id, env);
-      } catch (err) {
-        console.error("fetchMemberById failed", { id, error: String(err) });
-        return badGateway();
-      }
-      if (!page) {
-        return notFound(id);
-      }
-      return htmlResponse(buildCardPreview(id, toCardFields(page), base, await loadLayout(env)));
-    }
-
-    // /generate/:id[/back] : 名刺SVG生成
-    const genMatch = pathname.match(/^\/generate\/([^/]+?)(?:\.svg)?(\/back)?(?:\.svg)?\/?$/);
-    if (genMatch) {
-      const id = decodeURIComponent(genMatch[1]);
-      const isBack = Boolean(genMatch[2]);
-      if (!ID_PATTERN.test(id)) {
-        return notFound(id);
-      }
-
-      let page: NotionPage | null;
-      try {
-        page = await fetchMemberById(id, env);
-      } catch (err) {
-        console.error("fetchMemberById failed", { id, error: String(err) });
-        return badGateway();
-      }
-      if (!page) {
-        return notFound(id);
-      }
-
-      const fields = toCardFields(page);
-      const layout = await loadLayout(env);
-      if (isBack) {
-        return svgDownload(buildBackCard(fields, `${base}/p/${id}`, layout), `${id}-card-back`);
-      }
-      return svgDownload(buildFrontCard(fields, layout), `${id}-card-front`);
-    }
-
-    // /p/:id : リダイレクト処理
-    const redirectMatch = pathname.match(/^\/p\/([^/]+)\/?$/);
-    if (redirectMatch) {
-      const id = decodeURIComponent(redirectMatch[1]);
-      if (!ID_PATTERN.test(id)) {
-        return notFound(id);
-      }
-
-      let target: string | null;
-      try {
-        target = await resolveTarget(id, env, ctx);
-      } catch (err) {
-        console.error("resolveTarget failed", { id, error: String(err) });
-        return badGateway();
-      }
-
-      if (!target) {
-        return notFound(id);
-      }
-      return redirect(target, env);
-    }
-
-    // ルート / その他すべて : デフォルトURLへフォールバック
+    // ルート / その他すべて
     return redirect(env.DEFAULT_REDIRECT_URL, env);
   },
 } satisfies ExportedHandler<Env>;
 
 /* ────────────────────────────────────────────────────────────
- *  Notion 連携
+ *  Notion 参照（QR 読み取りは集中しうるので短命キャッシュ）
  * ──────────────────────────────────────────────────────────── */
 
-/** Notion Database を ID(Title) で検索して 1 レコード返す。該当なしは null */
-async function fetchMemberById(id: string, env: Env): Promise<NotionPage | null> {
-  const res = await fetch(`${NOTION_API_BASE}/databases/${env.NOTION_DATABASE_ID}/query`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${env.NOTION_API_KEY}`,
-      "Notion-Version": NOTION_VERSION,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      page_size: 1,
-      filter: { property: "ID", title: { equals: id } },
-    }),
-  });
-
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`Notion API ${res.status}: ${detail.slice(0, 500)}`);
-  }
-
-  const data = (await res.json()) as NotionQueryResponse;
-  return data.results?.[0] ?? null;
-}
-
-/** Notion Database の全レコードを ID 昇順で取得（プレビュー一覧用） */
-async function fetchAllMembers(env: Env): Promise<MemberSummary[]> {
-  const members: MemberSummary[] = [];
-  let cursor: string | undefined;
-
-  do {
-    const res = await fetch(`${NOTION_API_BASE}/databases/${env.NOTION_DATABASE_ID}/query`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${env.NOTION_API_KEY}`,
-        "Notion-Version": NOTION_VERSION,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        page_size: 100,
-        start_cursor: cursor,
-        sorts: [{ property: "ID", direction: "ascending" }],
-      }),
-    });
-
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      throw new Error(`Notion API ${res.status}: ${detail.slice(0, 500)}`);
-    }
-
-    const data = (await res.json()) as NotionQueryResponse;
-    for (const page of data.results ?? []) {
-      const id = getPlainText(page, "ID");
-      if (id) {
-        members.push({ id, name: getPlainText(page, "Name_JP"), active: getCheckbox(page, "Active") });
-      }
-    }
-    cursor = data.has_more ? data.next_cursor ?? undefined : undefined;
-  } while (cursor);
-
-  return members;
-}
-
-/**
- * :id に対応する転送先URLを返す。Active=false / 該当なし / 不正URL は null。
- * CACHE_TTL_SECONDS > 0 の場合は Cloudflare Cache API で結果を短命キャッシュする。
- */
-async function resolveTarget(id: string, env: Env, ctx: ExecutionContext): Promise<string | null> {
+async function lookup(id: string, env: Env, ctx: ExecutionContext): Promise<Member | null> {
   const ttl = toPositiveInt(env.CACHE_TTL_SECONDS);
+  if (ttl === 0) return getMember(id, env);
+
   const cache = caches.default;
-  // キャッシュキーはリクエストURLに依存しない合成キーにする
-  const cacheKey = new Request(`https://tech-qr.cache/lookup/${encodeURIComponent(id)}`);
+  const key = new Request(`https://tech-qr.cache/member/${encodeURIComponent(id)}`);
+  const hit = await cache.match(key);
+  if (hit) return (await hit.json()) as Member | null;
 
-  if (ttl > 0) {
-    const cached = await cache.match(cacheKey);
-    if (cached) {
-      const value = await cached.text();
-      return value === "" ? null : value;
-    }
-  }
-
-  const page = await fetchMemberById(id, env);
-  const rawUrl = page ? getUrl(page, "TargetURL") : "";
-  const target =
-    page && getCheckbox(page, "Active") && isSafeHttpUrl(rawUrl) ? rawUrl : null;
-
-  if (ttl > 0) {
-    // null も「存在しない」結果として短くキャッシュし、Notion への連打を防ぐ
-    const cacheTtl = target ? ttl : Math.min(ttl, 15);
-    const toStore = new Response(target ?? "", {
-      headers: { "Cache-Control": `public, max-age=${cacheTtl}`, "Content-Type": "text/plain" },
-    });
-    ctx.waitUntil(cache.put(cacheKey, toStore));
-  }
-
-  return target;
-}
-
-/* ── Notion プロパティ読み取り ─────────────────────────────── */
-
-function getProp(page: NotionPage, name: string): NotionProperty | undefined {
-  return page.properties?.[name];
-}
-
-/** title / rich_text / select / formula(string) プロパティを平文で取得 */
-function getPlainText(page: NotionPage, name: string): string {
-  const p = getProp(page, name);
-  if (!p) return "";
-  const parts = p.title ?? p.rich_text;
-  if (parts) {
-    return parts
-      .map((t) => t.plain_text ?? "")
-      .join("")
-      .trim();
-  }
-  if (p.select) return (p.select.name ?? "").trim();
-  if (p.formula?.type === "string" || p.formula?.string != null) {
-    return (p.formula.string ?? "").trim();
-  }
-  return "";
-}
-
-/** url プロパティを取得（無ければ rich_text を試す） */
-function getUrl(page: NotionPage, name: string): string {
-  const p = getProp(page, name);
-  return (p?.url ?? "").trim() || getPlainText(page, name);
-}
-
-function getCheckbox(page: NotionPage, name: string): boolean {
-  return getProp(page, name)?.checkbox === true;
-}
-
-/** Notion ページ -> 名刺フィールド */
-function toCardFields(page: NotionPage): CardFields {
-  return {
-    nameJp: getPlainText(page, "Name_JP"),
-    nameEn: getPlainText(page, "Name_EN"),
-    roleJp: getPlainText(page, "Role"),
-    roleEn: getPlainText(page, "Role_EN"),
-    email: getUrl(page, "Email").replace(/^mailto:/i, "").trim(),
-    githubId: normalizeHandle(getPlainText(page, "Github_ID"), ["github.com"]),
-    xId: normalizeHandle(getPlainText(page, "X_ID"), ["x.com", "twitter.com"]),
-    skillTags: getPlainText(page, "SkillTags")
-      .split(/[,、，]/)
-      .map((t) => t.trim())
-      .filter(Boolean),
-  };
-}
-
-/** "@name" / "https://github.com/name/" などを "name" に正規化 */
-function normalizeHandle(raw: string, hosts: string[]): string {
-  let s = raw.trim().replace(/^@/, "");
-  for (const host of hosts) {
-    const re = new RegExp(`^https?://(www\\.)?${host.replace(/\./g, "\\.")}/`, "i");
-    s = s.replace(re, "");
-  }
-  return s.replace(/[/\s]+$/, "");
+  const member = await getMember(id, env);
+  // 「いない」結果も短く覚えて、存在しない ID への連打が Notion に届かないようにする
+  const age = member ? ttl : Math.min(ttl, 15);
+  ctx.waitUntil(
+    cache.put(
+      key,
+      new Response(JSON.stringify(member), {
+        headers: { "Content-Type": "application/json", "Cache-Control": `public, max-age=${age}` },
+      }),
+    ),
+  );
+  return member;
 }
 
 /* ────────────────────────────────────────────────────────────
- *  レスポンス生成ヘルパ
+ *  レスポンス
  * ──────────────────────────────────────────────────────────── */
+
+function noStore(): ResponseInit {
+  return { headers: { "Cache-Control": "no-store" } };
+}
 
 function redirect(location: string, env: Env): Response {
   const status = String(env.REDIRECT_STATUS) === "307" ? 307 : 302;
   const safe = isSafeHttpUrl(location) ? location : "https://github.com/Kawamoto24e1058";
   return new Response(null, {
     status,
-    headers: {
-      Location: safe,
-      // リダイレクト自体はキャッシュさせない(転送先はNotionで即時変更されうる)
-      "Cache-Control": "no-store",
-      "Referrer-Policy": "no-referrer",
-    },
+    // 転送先は Notion で随時変わるので、ブラウザ/CDN には覚えさせない
+    headers: { Location: safe, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" },
+  });
+}
+
+function html(body: string): Response {
+  return new Response(body, {
+    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
   });
 }
 
 function svgDownload(svg: string, basename: string): Response {
   return new Response(svg, {
-    status: 200,
     headers: {
       "Content-Type": "image/svg+xml; charset=utf-8",
       "Content-Disposition": `attachment; filename="${basename}.svg"`,
-      // Notion のデータが随時変わるためキャッシュさせない
       "Cache-Control": "no-store",
     },
   });
-}
-
-function htmlResponse(html: string): Response {
-  return new Response(html, {
-    status: 200,
-    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
-  });
-}
-
-/* ────────────────────────────────────────────────────────────
- *  レイアウト（KV）+ エディタ API
- * ──────────────────────────────────────────────────────────── */
-
-/** KV から保存済みレイアウトを読み、デフォルトにマージして返す */
-async function loadLayout(env: Env): Promise<CardLayout> {
-  try {
-    const raw = await env.LAYOUT.get(LAYOUT_KEY, "json");
-    return resolveLayout(raw);
-  } catch (err) {
-    console.error("loadLayout failed", { error: String(err) });
-    return DEFAULT_LAYOUT;
-  }
-}
-
-/** POST /editor/preview : 作業中レイアウトで SVG を描画（エディタ用の軽量版・ロゴは URL 参照） */
-async function editorPreview(request: Request, env: Env): Promise<Response> {
-  let body: { side?: string; layout?: unknown; id?: string };
-  try {
-    body = await request.json();
-  } catch {
-    return new Response("bad json", { status: 400 });
-  }
-  const side: CardSide = body.side === "back" ? "back" : "front";
-  const layout = resolveLayout(body.layout);
-  const base = (env.PUBLIC_BASE_URL || new URL(request.url).origin).replace(/\/+$/, "");
-
-  // プレビューに使うデータ: サンプル / 長い名前のサンプル / 実メンバー(ID)
-  let fields = SAMPLE_FIELDS;
-  let qrId = "yamada";
-  if (body.id === "__sample_long") {
-    fields = SAMPLE_FIELDS_LONG;
-  } else if (typeof body.id === "string" && body.id && body.id !== "__sample") {
-    if (!ID_PATTERN.test(body.id)) {
-      return new Response("bad id", { status: 400 });
-    }
-    try {
-      const page = await fetchMemberById(body.id, env);
-      if (page) {
-        fields = toCardFields(page);
-        qrId = body.id;
-      }
-    } catch (err) {
-      console.error("editorPreview member fetch failed", { error: String(err) });
-      return badGateway();
-    }
-  }
-
-  const opts = { logoHref: "/editor/logo.png" };
-  const svg =
-    side === "back"
-      ? buildBackCard(fields, `${base}/p/${qrId}`, layout, opts)
-      : buildFrontCard(fields, layout, opts);
-  return new Response(svg, {
-    headers: { "Content-Type": "image/svg+xml; charset=utf-8", "Cache-Control": "no-store" },
-  });
-}
-
-let logoBytes: Uint8Array | null = null;
-/** LOGO_DATA_URI(base64) -> PNG バイト列（初回のみデコード） */
-function logoPngBytes(): Uint8Array {
-  if (!logoBytes) {
-    const bin = atob(LOGO_DATA_URI.slice(LOGO_DATA_URI.indexOf(",") + 1));
-    logoBytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
-  }
-  return logoBytes;
-}
-
-/** POST /editor/layout : レイアウトをサニタイズして KV に保存 */
-async function editorSaveLayout(request: Request, env: Env): Promise<Response> {
-  let raw: unknown;
-  try {
-    raw = await request.json();
-  } catch {
-    return new Response("bad json", { status: 400 });
-  }
-  const layout = resolveLayout(raw);
-  // デフォルトと同一なら保存せず KV を空にする（将来 DEFAULT_LAYOUT を更新したとき追従できる）
-  if (JSON.stringify(layout) === JSON.stringify(DEFAULT_LAYOUT)) {
-    await env.LAYOUT.delete(LAYOUT_KEY);
-  } else {
-    await env.LAYOUT.put(LAYOUT_KEY, JSON.stringify(layout));
-  }
-  return Response.json({ ok: true, layout }, { headers: { "Cache-Control": "no-store" } });
 }
 
 function badGateway(): Response {
@@ -508,7 +185,7 @@ function notFound(id: string): Response {
 </style>
 <h1>404 Not Found</h1>
 <p><code>${escapeXml(id)}</code> は見つかりませんでした。</p>
-<p>Notion の ID プロパティを確認してください。</p>
+<p>Notion の ID プロパティ（と Active のチェック）を確認してください。</p>
 </html>`;
   return new Response(body, {
     status: 404,
@@ -533,33 +210,4 @@ function isSafeHttpUrl(value: string): boolean {
   } catch {
     return false;
   }
-}
-
-/* ────────────────────────────────────────────────────────────
- *  Notion API レスポンス型 (必要な部分のみ)
- * ──────────────────────────────────────────────────────────── */
-
-interface NotionRichTextItem {
-  plain_text?: string;
-}
-
-interface NotionProperty {
-  type?: string;
-  title?: NotionRichTextItem[];
-  rich_text?: NotionRichTextItem[];
-  url?: string | null;
-  checkbox?: boolean;
-  select?: { name?: string } | null;
-  formula?: { type?: string; string?: string | null };
-}
-
-interface NotionPage {
-  id: string;
-  properties?: Record<string, NotionProperty | undefined>;
-}
-
-interface NotionQueryResponse {
-  results?: NotionPage[];
-  has_more?: boolean;
-  next_cursor?: string | null;
 }

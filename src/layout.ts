@@ -1,9 +1,9 @@
 /**
- * 名刺レイアウトのスキーマとデフォルト値。
+ * 名刺の見た目（配置・サイズ・書体・色）を決める唯一の場所。
  *
- * カードは 910 × 550 の固定キャンバス。各要素は key で識別し、
- * /editor が編集した差分を KV に JSON で保存する。
- * 保存値は認証なしで POST されうるので、resolveLayout() で必ずサニタイズする。
+ * カードは 910 × 550 の固定キャンバス。メンバーが触れるのは Notion のデータだけで、
+ * 見た目はこのファイルの LAYOUT 1 つに固定（組織で統一）。微調整はここの数値を直して再デプロイする。
+ * 座標の単位は SVG の viewBox（= mm × 10）。
  */
 
 export type Anchor = "start" | "middle" | "end";
@@ -92,7 +92,7 @@ export interface CardLayout {
 }
 
 /* ────────────────────────────────────────────────────────────
- *  デフォルトレイアウト（Figma Make のデザインに対応）
+ *  レイアウト（Figma Make のデザインに対応）
  * ──────────────────────────────────────────────────────────── */
 
 const T = (
@@ -116,7 +116,7 @@ const T = (
   ...opts,
 });
 
-export const DEFAULT_LAYOUT: CardLayout = {
+export const LAYOUT: CardLayout = {
   version: 1,
   front: {
     logoWatermark: { type: "logo", x: 510, y: -30, w: 450, h: 620, opacity: 0.06, visible: true },
@@ -143,122 +143,3 @@ export const DEFAULT_LAYOUT: CardLayout = {
     footerRight: T(858, 532, 7.5, { tracking: 2, fill: "#3f3f46", font: "mo", anchor: "end", bind: "year" }),
   },
 };
-
-/* ────────────────────────────────────────────────────────────
- *  サニタイズ / マージ
- * ──────────────────────────────────────────────────────────── */
-
-const HEX = /^#[0-9a-fA-F]{6}$/;
-const ANCHORS: Anchor[] = ["start", "middle", "end"];
-const FONTS: FontClass[] = ["hd", "mo"];
-const TRANSFORMS: TextTransform[] = ["none", "upper"];
-
-function nz(v: unknown, fallback: number, min = -2000, max = 4000): number {
-  const n = typeof v === "number" ? v : Number(v);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.min(max, Math.max(min, n));
-}
-function pick<T>(v: unknown, allowed: T[], fallback: T): T {
-  return allowed.includes(v as T) ? (v as T) : fallback;
-}
-function hex(v: unknown, fallback: string): string {
-  return typeof v === "string" && HEX.test(v) ? v : fallback;
-}
-function bool(v: unknown, fallback: boolean): boolean {
-  return typeof v === "boolean" ? v : fallback;
-}
-
-function mergeEl(def: Element, raw: unknown): Element {
-  const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-  switch (def.type) {
-    case "text": {
-      const d = def;
-      const el: TextEl = {
-        type: "text",
-        x: nz(o.x, d.x),
-        y: nz(o.y, d.y),
-        size: nz(o.size, d.size, 1, 400),
-        weight: nz(o.weight, d.weight, 100, 900),
-        tracking: nz(o.tracking, d.tracking, -20, 60),
-        anchor: pick(o.anchor, ANCHORS, d.anchor),
-        fill: hex(o.fill, d.fill),
-        opacity: nz(o.opacity, d.opacity, 0, 1),
-        font: pick(o.font, FONTS, d.font),
-        transform: pick(o.transform, TRANSFORMS, d.transform),
-        visible: bool(o.visible, d.visible),
-      };
-      if (d.bind) el.bind = d.bind;
-      const t = typeof o.text === "string" ? o.text.slice(0, 120) : d.text;
-      if (t !== undefined) el.text = t;
-      return el;
-    }
-    case "logo": {
-      const d = def;
-      return {
-        type: "logo",
-        x: nz(o.x, d.x),
-        y: nz(o.y, d.y),
-        w: nz(o.w, d.w, 4, 3000),
-        h: nz(o.h, d.h, 4, 3000),
-        opacity: nz(o.opacity, d.opacity, 0, 1),
-        visible: bool(o.visible, d.visible),
-      };
-    }
-    case "chips": {
-      const d = def;
-      return {
-        type: "chips",
-        x: nz(o.x, d.x),
-        y: nz(o.y, d.y),
-        size: nz(o.size, d.size, 4, 40),
-        gap: nz(o.gap, d.gap, 0, 60),
-        height: nz(o.height, d.height, 10, 60),
-        visible: bool(o.visible, d.visible),
-      };
-    }
-    case "contact": {
-      const d = def;
-      return {
-        type: "contact",
-        x: nz(o.x, d.x),
-        y: nz(o.y, d.y),
-        size: nz(o.size, d.size, 4, 40),
-        rowGap: nz(o.rowGap, d.rowGap, 8, 80),
-        visible: bool(o.visible, d.visible),
-      };
-    }
-    case "qr": {
-      const d = def;
-      return {
-        type: "qr",
-        x: nz(o.x, d.x),
-        y: nz(o.y, d.y),
-        w: nz(o.w, d.w, 80, 900),
-        h: nz(o.h, d.h, 80, 550),
-        visible: bool(o.visible, d.visible),
-      };
-    }
-  }
-}
-
-function mergeSide(
-  def: Record<string, Element>,
-  raw: unknown,
-): Record<string, Element> {
-  const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-  const out: Record<string, Element> = {};
-  for (const [key, defEl] of Object.entries(def)) {
-    out[key] = mergeEl(defEl, o[key]);
-  }
-  return out;
-}
-
-/** 保存値（信頼できない）をデフォルトにマージし、必ず妥当なレイアウトを返す */
-export function resolveLayout(raw: unknown): CardLayout {
-  const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-  return {
-    version: 1,
-    front: mergeSide(DEFAULT_LAYOUT.front, o.front),
-    back: mergeSide(DEFAULT_LAYOUT.back, o.back),
-  };
-}

@@ -2,8 +2,7 @@
  * 名刺SVG生成（テック部 / 黒 × 白）
  *
  * - 91mm × 55mm（viewBox="0 0 910 550"）、Figma Make のデザインに準拠
- * - 各テキスト/ロゴ/QRの座標・サイズ・書体は src/layout.ts の CardLayout で駆動。
- *   /editor が編集した差分は KV に保存され、resolveLayout() でデフォルトにマージされる。
+ * - 各テキスト/ロゴ/QRの座標・サイズ・書体は src/layout.ts の LAYOUT（固定1つ）で駆動。
  * - ロゴは src/logo.ts の PNG を base64 同梱し feColorMatrix で白黒反転
  * - QR は uqr で動的生成
  *
@@ -12,7 +11,7 @@
 import { encode } from "uqr";
 import { LOGO_DATA_URI, LOGO_HEIGHT, LOGO_WIDTH } from "./logo";
 import {
-  DEFAULT_LAYOUT,
+  LAYOUT,
   type CardLayout,
   type ChipsEl,
   type ContactEl,
@@ -47,12 +46,9 @@ const FONT_STYLE = `<style><![CDATA[
     .mo { font-family: "Courier New", Courier, "SFMono-Regular", Menlo, monospace; }
   ]]></style>`;
 
-/** logoHref を渡すと base64 埋め込みの代わりにその URL を参照する（エディタ用の軽量描画） */
-function logoSymbol(logoHref: string = LOGO_DATA_URI): string {
-  return `<symbol id="logo" viewBox="0 0 ${LOGO_WIDTH} ${LOGO_HEIGHT}" preserveAspectRatio="xMidYMid meet">
-    <image href="${logoHref}" width="${LOGO_WIDTH}" height="${LOGO_HEIGHT}"/>
+const LOGO_SYMBOL = `<symbol id="logo" viewBox="0 0 ${LOGO_WIDTH} ${LOGO_HEIGHT}" preserveAspectRatio="xMidYMid meet">
+    <image href="${LOGO_DATA_URI}" width="${LOGO_WIDTH}" height="${LOGO_HEIGHT}"/>
   </symbol>`;
-}
 
 const LOGO_INVERT_FILTER = `<filter id="logo-invert" color-interpolation-filters="sRGB">
     <feColorMatrix type="matrix" values="-1 0 0 0 1  0 -1 0 0 1  0 0 -1 0 1  0 0 0 1 0"/>
@@ -98,47 +94,24 @@ const CONTACT_ICONS: Record<string, string> = {
  *  公開 API
  * ──────────────────────────────────────────────────────────── */
 
-export interface RenderOpts {
-  /** ロゴ画像の参照先。未指定なら base64 データURIを埋め込む（印刷入稿用の自己完結SVG） */
-  logoHref?: string;
+export function buildFrontCard(f: CardFields): string {
+  return renderSide("front", f, "", LAYOUT);
 }
 
-export function buildFrontCard(
-  f: CardFields,
-  layout: CardLayout = DEFAULT_LAYOUT,
-  opts: RenderOpts = {},
-): string {
-  return renderSide("front", f, "", layout, opts);
+export function buildBackCard(f: CardFields, qrTargetUrl: string): string {
+  return renderSide("back", f, qrTargetUrl, LAYOUT);
 }
 
-export function buildBackCard(
-  f: CardFields,
-  qrTargetUrl: string,
-  layout: CardLayout = DEFAULT_LAYOUT,
-  opts: RenderOpts = {},
-): string {
-  return renderSide("back", f, qrTargetUrl, layout, opts);
-}
-
-function renderSide(
-  side: CardSide,
-  f: CardFields,
-  qrUrl: string,
-  layout: CardLayout,
-  opts: RenderOpts,
-): string {
-  const symbol = logoSymbol(opts.logoHref);
+function renderSide(side: CardSide, f: CardFields, qrUrl: string, layout: CardLayout): string {
   const defs =
     side === "back"
-      ? `${LOGO_INVERT_FILTER}\n    ${symbol}\n    ${FONT_STYLE}\n    ${BACK_DEFS}`
-      : `${LOGO_INVERT_FILTER}\n    ${symbol}\n    ${FONT_STYLE}`;
+      ? `${LOGO_INVERT_FILTER}\n    ${LOGO_SYMBOL}\n    ${FONT_STYLE}\n    ${BACK_DEFS}`
+      : `${LOGO_INVERT_FILTER}\n    ${LOGO_SYMBOL}\n    ${FONT_STYLE}`;
 
   const chrome = side === "back" ? BACK_CHROME : FRONT_CHROME;
-  const body = Object.entries(layout[side])
-    .map(([key, el]) => {
-      const inner = renderElement(el, side, f, qrUrl);
-      return inner ? `<g data-el="${key}">${inner}</g>` : "";
-    })
+  const body = Object.values(layout[side])
+    .map((el) => renderElement(el, f, qrUrl))
+    .filter(Boolean)
     .join("\n  ");
 
   return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 910 550" width="91mm" height="55mm">
@@ -156,7 +129,7 @@ function renderSide(
  *  要素レンダリング
  * ──────────────────────────────────────────────────────────── */
 
-function renderElement(el: Element, side: CardSide, f: CardFields, qrUrl: string): string {
+function renderElement(el: Element, f: CardFields, qrUrl: string): string {
   if (!el.visible) return "";
   switch (el.type) {
     case "logo":

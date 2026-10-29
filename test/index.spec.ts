@@ -123,11 +123,7 @@ describe("GET /p/:id", () => {
     expect(res.status).toBe(502);
   });
 
-  it("ignores non-http(s) TargetURL values", async () => {
-    stubNotion({ evil: { targetUrl: "javascript:alert(1)", active: true } });
-    const res = await call("/p/evil");
-    expect(res.status).toBe(404);
-  });
+
 });
 
 describe("GET /generate/:id (front)", () => {
@@ -349,147 +345,89 @@ describe("GET /preview/:id", () => {
   });
 });
 
-describe("layout editor", () => {
-  async function postJson(path: string, body: unknown) {
-    return call(path, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  }
-
-  it("GET /editor serves the editor HTML", async () => {
-    const res = await call("/editor");
-    expect(res.status).toBe(200);
-    expect(res.headers.get("Content-Type")).toBe("text/html; charset=utf-8");
-    expect(await res.text()).toContain("レイアウトエディタ");
-  });
-
-  it("GET /editor/layout returns the resolved layout", async () => {
-    await postJson("/editor/reset", {});
-    const res = await call("/editor/layout");
-    const { layout } = (await res.json()) as { layout: any };
-    expect(layout.front.nameJp.type).toBe("text");
-    expect(layout.back.qrPanel.type).toBe("qr");
-  });
-
-  it("POST /editor/preview renders sample SVG for the given side", async () => {
-    const back = await postJson("/editor/preview", { side: "back", layout: {} });
-    expect(back.status).toBe(200);
-    expect(back.headers.get("Content-Type")).toBe("image/svg+xml; charset=utf-8");
-    expect(await back.text()).toContain("SCAN TO CONNECT");
-
-    const front = await postJson("/editor/preview", { side: "front", layout: {} });
-    expect(await front.text()).toContain("山田 太郎"); // sample data
-  });
-
-  it("saves a moved element and reflects it in /generate", async () => {
-    await postJson("/editor/reset", {});
-    stubNotion({ haruharu: { Name_JP: "川本" } });
-
-    await postJson("/editor/layout", { front: { nameJp: { x: 123, y: 321 } } });
-
-    const got = (await (await call("/editor/layout")).json()) as { layout: any };
-    expect(got.layout.front.nameJp.x).toBe(123);
-    expect(got.layout.front.nameJp.y).toBe(321);
-
-    const svg = await (await call("/generate/haruharu")).text();
-    expect(svg).toContain('x="123"');
-    expect(svg).toContain('y="321"');
-  });
-
-  it("sanitizes hostile values from the posted layout", async () => {
-    await postJson("/editor/reset", {});
-    const res = await postJson("/editor/layout", {
-      front: {
-        nameJp: { fill: "url(#x)", x: 1e9, opacity: 42, anchor: "sideways" },
-        orgName: { text: "<script>alert(1)</script>" },
+describe("QR landing: /p/:id", () => {
+  it("shows the profile page when TargetURL is empty", async () => {
+    stubNotion({
+      haruharu: {
+        active: true,
+        Name_JP: "山田 太郎",
+        Name_EN: "Taro Yamada",
+        Role: "部長",
+        Role_EN: "President",
+        Email: "taro@example.com",
+        Github_ID: "@taro-dev",
+        X_ID: "https://x.com/taro_dev/",
+        SkillTags: "TypeScript, Cloudflare",
       },
     });
-    const { layout } = (await res.json()) as { layout: any };
-    expect(layout.front.nameJp.fill).toBe("#ffffff"); // rejected -> default
-    expect(layout.front.nameJp.x).toBeLessThanOrEqual(4000); // clamped
-    expect(layout.front.nameJp.opacity).toBe(1); // clamped
-    expect(layout.front.nameJp.anchor).toBe("start"); // rejected -> default
-
-    stubNotion({ x: { Name_JP: "テスト" } });
-    const svg = await (await call("/generate/x")).text();
-    expect(svg).not.toContain("<script>alert(1)</script>");
-  });
-
-  it("GET /editor/layout also returns the defaults and whether a layout is saved", async () => {
-    await postJson("/editor/reset", {});
-    const first = (await (await call("/editor/layout")).json()) as { saved: boolean; defaults: any };
-    expect(first.saved).toBe(false);
-    expect(first.defaults.front.nameJp.x).toBe(46);
-
-    await postJson("/editor/layout", { front: { nameJp: { x: 80 } } });
-    const second = (await (await call("/editor/layout")).json()) as { saved: boolean };
-    expect(second.saved).toBe(true);
-  });
-
-  it("saving a layout identical to the defaults clears the KV entry", async () => {
-    await postJson("/editor/layout", { front: { nameJp: { x: 80 } } });
-    const { defaults } = (await (await call("/editor/layout")).json()) as { defaults: unknown };
-    await postJson("/editor/layout", defaults);
-    const after = (await (await call("/editor/layout")).json()) as { saved: boolean };
-    expect(after.saved).toBe(false);
-  });
-
-  it("editor preview references the logo by URL instead of embedding base64", async () => {
-    const svg = await (await postJson("/editor/preview", { side: "front", layout: {} })).text();
-    expect(svg).toContain('href="/editor/logo.png"');
-    expect(svg).not.toContain("data:image/png;base64");
-    expect(svg.length).toBeLessThan(40_000);
-    expect(svg).toContain('data-el="nameJp"'); // elements are addressable by the editor
-  });
-
-  it("editor preview can render a real member and a long-name sample", async () => {
-    stubNotion({ haruharu: { Name_JP: "川本 晴春", Role: "部長", Role_EN: "President" } });
-    const real = await (await postJson("/editor/preview", { side: "front", layout: {}, id: "haruharu" })).text();
-    expect(real).toContain("川本 晴春");
-
-    const long = await (await postJson("/editor/preview", { side: "front", layout: {}, id: "__sample_long" })).text();
-    expect(long).toContain("一ノ瀬");
-
-    const back = await (await postJson("/editor/preview", { side: "back", layout: {}, id: "haruharu" })).text();
-    expect(back).toContain("/p/haruharu"); // QR url shown for the chosen member
-  });
-
-  it("editor preview rejects a malformed member id", async () => {
-    const res = await postJson("/editor/preview", { side: "front", layout: {}, id: "../etc" });
-    expect(res.status).toBe(400);
-  });
-
-  it("GET /editor/members lists Notion members", async () => {
-    stubNotion({ haruharu: { Name_JP: "川本 晴春", active: true } });
-    const res = await call("/editor/members");
+    const res = await call("/p/haruharu");
     expect(res.status).toBe(200);
-    const list = (await res.json()) as Array<{ id: string; name: string }>;
-    expect(list).toEqual([{ id: "haruharu", name: "川本 晴春", active: true }]);
+    expect(res.headers.get("Content-Type")).toBe("text/html; charset=utf-8");
+
+    const html = await res.text();
+    expect(html).toContain("山田 太郎");
+    expect(html).toContain("Taro Yamada"); // 表示時に CSS で大文字化
+    expect(html).toContain("部長");
+    expect(html).toContain('href="https://github.com/taro-dev"');
+    expect(html).toContain('href="https://x.com/taro_dev"');
+    expect(html).toContain('href="mailto:taro@example.com"');
+    expect(html).toContain("TypeScript");
+    expect(html).toContain('content="noindex, nofollow"');
+    expect(html).toContain('src="/assets/logo.png"');
   });
 
-  it("GET /editor/logo.png serves a cacheable PNG", async () => {
-    const res = await call("/editor/logo.png");
+  it("redirects instead when TargetURL is set (override)", async () => {
+    stubNotion({ haruharu: { active: true, targetUrl: "https://example.org/me", Name_JP: "山田" } });
+    const res = await call("/p/haruharu");
+    expect(res.status).toBe(302);
+    expect(res.headers.get("Location")).toBe("https://example.org/me");
+  });
+
+  it("falls back to the profile when TargetURL is not a safe http(s) URL", async () => {
+    stubNotion({ evil: { active: true, targetUrl: "javascript:alert(1)", Name_JP: "悪者" } });
+    const res = await call("/p/evil");
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("悪者");
+  });
+
+  it("escapes Notion text and refuses to link odd handles / emails", async () => {
+    stubNotion({
+      x: {
+        active: true,
+        Name_JP: '<img src=x onerror=alert(1)>',
+        Github_ID: 'a" onmouseover="alert(1)',
+        Email: "not an email",
+      },
+    });
+    const html = await (await call("/p/x")).text();
+    expect(html).not.toContain("<img src=x");
+    expect(html).toContain("&lt;img src=x");
+    expect(html).not.toContain('href="https://github.com/a"'); // never turned into a link
+    expect(html).not.toContain("mailto:not");
+  });
+
+  it("returns 404 for an inactive member's profile", async () => {
+    stubNotion({ haruharu: { active: false, Name_JP: "山田" } });
+    expect((await call("/p/haruharu")).status).toBe(404);
+    expect((await call("/profile/haruharu")).status).toBe(404);
+  });
+
+  it("/profile/:id always shows the profile, even with a redirect override", async () => {
+    stubNotion({ haruharu: { active: true, targetUrl: "https://example.org/me", Name_JP: "山田 太郎" } });
+    const res = await call("/profile/haruharu");
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("山田 太郎");
+  });
+});
+
+describe("GET /assets/logo.png", () => {
+  it("serves a cacheable PNG", async () => {
+    const res = await call("/assets/logo.png");
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toBe("image/png");
     expect(res.headers.get("Cache-Control")).toContain("max-age");
     const bytes = new Uint8Array(await res.arrayBuffer());
     expect([...bytes.slice(1, 4)]).toEqual([80, 78, 71]); // "PNG"
-  });
-
-  it("the editor page ships its client script without template-literal leftovers", async () => {
-    const html = await (await call("/editor")).text();
-    expect(html).toContain('id="board"');
-    expect(html).toContain("function resizeMove");
-    expect(html).not.toContain("${");
-  });
-
-  it("POST /editor/reset restores defaults", async () => {
-    await postJson("/editor/layout", { front: { nameJp: { x: 999 } } });
-    await postJson("/editor/reset", {});
-    const { layout } = (await (await call("/editor/layout")).json()) as { layout: any };
-    expect(layout.front.nameJp.x).toBe(46); // DEFAULT_LAYOUT value
   });
 });
 
@@ -511,6 +449,6 @@ describe("fallback routing", () => {
   it("rejects non-GET methods with 405", async () => {
     const res = await call("/p/haruharu", { method: "POST" });
     expect(res.status).toBe(405);
-    expect(res.headers.get("Allow")).toBe("GET, HEAD, POST");
+    expect(res.headers.get("Allow")).toBe("GET, HEAD");
   });
 });
