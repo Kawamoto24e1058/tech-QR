@@ -1,5 +1,5 @@
 /**
- * 名刺 SVG（テック部 / 白黒）— デザイン「BADGE」
+ * 名刺 SVG（テック部 / 白黒）— デザイン「QUIET」（主役は氏名と QR だけ。装飾は上部の白帯のみ）
  *
  * - 91mm × 55mm（viewBox 0 0 910 550。1 単位 = 0.1mm）。塗り足し 3mm 付きなら 97mm × 61mm（viewBox -30 -30 970 610）
  * - 文字はすべて**アウトライン（図形）**で出力するので、入稿データでフォントが変わらない（src/fonts.ts）
@@ -66,138 +66,103 @@ function svg(inner: string, bleed: boolean): string {
  *  表面
  * ──────────────────────────────────────────────────────────── */
 
+/** 全部大文字の英名・肩書きは「Haru Kawamoto」の形に直す（大文字の羅列は強すぎるため）。混在していればそのまま */
+function nice(s: string): string {
+  return /[A-Z]/.test(s) && s === s.toUpperCase() ? s.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()) : s;
+}
+
 function front(ts: Typesetter, f: CardFields, logoHref: string): string {
   const out: string[] = [];
-  const id = f.id.toUpperCase();
+  const L = 56;
+  const R = 854;
 
-  // 背面に敷く巨大なアウトライン文字（英名の最初の単語。無ければ ID）
-  const giant = (f.nameEn.toUpperCase().match(/[A-Z0-9]+/)?.[0] ?? id).slice(0, 6);
-  if (giant) {
-    const size = fitSize(ts, "display", giant, 196, 560, 80, -3);
-    const w = ts.width("display", giant, size, -3);
-    out.push(ts.text("display", giant, 948 - w, 330, size, { fill: "none", stroke: PAPER, strokeWidth: 2, opacity: 0.3, tracking: -3 }));
-  }
+  // 上部の白帯（唯一の反転部分）: ロゴ + 団体名 / 右に肩書き
+  out.push(`<rect x="${-BLEED}" y="${-BLEED}" width="${910 + 2 * BLEED}" height="${128 + BLEED}" fill="${PAPER}"/>`);
+  out.push(`<image href="${logoHref}" x="${L}" y="36" width="38" height="58" preserveAspectRatio="xMidYMid meet"/>`);
+  out.push(ts.text("display", "Tech Club", 112, 66, 28, { fill: INK, tracking: -0.3 }));
+  const sub = `DEV TEAM / ${f.id.toUpperCase()}`;
+  out.push(ts.text("mono", sub, 113, 90, fitSize(ts, "mono", sub, 15, 400, 11, 2), { fill: INK, opacity: 0.6, tracking: 2 }));
 
-  out.push(halftone(560, -30, 380, 190));
-
-  // 白帯 + ロゴ + 団体名
-  out.push(`<rect x="${-BLEED}" y="${-BLEED}" width="${560 + BLEED}" height="130" fill="${PAPER}"/>`);
-  out.push(`<image href="${logoHref}" x="44" y="32" width="38" height="58" preserveAspectRatio="xMidYMid meet"/>`);
-  out.push(ts.text("display", "TECH CLUB", 104, 58, 30, { fill: INK, tracking: 1 }));
-  const sub = `DEV TEAM / ${id}`;
-  out.push(ts.text("mono", sub, 105, 84, fitSize(ts, "mono", sub, 18, 430, 12, 3), { fill: INK, tracking: 3 }));
-
-  // 肩書き（白抜きの反転ブロック）
-  const roleEn = f.roleEn.toUpperCase();
+  const roleEn = nice(f.roleEn);
   if (f.roleJp || roleEn) {
-    const jw = f.roleJp ? ts.width("jp", f.roleJp, 28) : 0;
-    const ew = roleEn ? ts.width("mono", roleEn, 18, 4) : 0;
-    const pad = 16;
-    const gap = f.roleJp && roleEn ? 16 : 0;
-    out.push(`<rect x="50" y="130" width="${num(pad * 2 + jw + gap + ew)}" height="50" fill="${PAPER}"/>`);
-    if (f.roleJp) out.push(ts.text("jp", f.roleJp, 50 + pad, 166, 28, { fill: INK }));
-    if (roleEn) out.push(ts.text("mono", roleEn, 50 + pad + jw + gap, 164, 18, { fill: INK, tracking: 4 }));
+    const jw = f.roleJp ? ts.width("jpBold", f.roleJp, 28) : 0;
+    const gap = f.roleJp && roleEn ? 14 : 0;
+    const ew = roleEn ? ts.width("mono", roleEn, 16, 0.5) : 0;
+    const x0 = R - (jw + gap + ew);
+    if (f.roleJp) out.push(ts.text("jpBold", f.roleJp, x0, 74, 28, { fill: INK }));
+    if (roleEn) out.push(ts.text("mono", roleEn, x0 + jw + gap, 73, 16, { fill: INK, opacity: 0.6, tracking: 0.5 }));
   }
 
-  // 氏名
+  // 氏名（主役）+ 英名
   const nameMain = f.nameJp || f.nameEn || f.id;
-  out.push(ts.text("jp", nameMain, 44, 296, fitSize(ts, "jp", nameMain, 124, 806, 56, -2), { tracking: -2 }));
+  out.push(ts.text("jp", nameMain, L - 6, 280, fitSize(ts, "jp", nameMain, 118, R - L + 6, 56, -2), { tracking: -2 }));
   if (f.nameJp && f.nameEn) {
-    const en = f.nameEn.toUpperCase();
-    out.push(ts.text("display", en, 52, 342, fitSize(ts, "display", en, 34, 806, 18, 3), { tracking: 3 }));
+    const en = nice(f.nameEn);
+    out.push(ts.text("display", en, L, 330, fitSize(ts, "display", en, 36, R - L, 18, -0.4), { tracking: -0.4 }));
   }
-  out.push(`<rect x="52" y="364" width="806" height="5" fill="${PAPER}"/>`);
+  out.push(`<rect x="${L}" y="356" width="${R - L}" height="2" fill="${PAPER}" fill-opacity=".35"/>`);
 
-  // スキル（先頭 3 つ）
+  // スキル（先頭 3 つ。枠は付けず、区切りの / だけ）
   const tags = f.skillTags.slice(0, 3).map((t) => clip(t, 16));
   if (tags.length) {
+    const sep = 40;
     let size = 19;
-    const widthAt = (s: number) => tags.reduce((a, t) => a + ts.width("mono", t, s) + 36, 0) + 20 * (tags.length - 1);
-    while (size > 14 && widthAt(size) > 806) size -= 0.5;
-    let x = 52;
-    for (const t of tags) {
-      const w = ts.width("mono", t, size) + 36;
-      out.push(`<rect x="${num(x)}" y="388" width="${num(w)}" height="38" fill="none" stroke="${PAPER}" stroke-width="2.4"/>`);
-      out.push(ts.text("mono", t, x + w / 2, 413, size, { anchor: "middle" }));
-      x += w + 20;
-    }
+    const widthAt = (s: number) => tags.reduce((a, t) => a + ts.width("mono", t, s), 0) + sep * (tags.length - 1);
+    while (size > 14 && widthAt(size) > R - L) size -= 0.5;
+    let x = L;
+    tags.forEach((t, i) => {
+      out.push(ts.text("mono", t, x, 404, size));
+      x += ts.width("mono", t, size);
+      if (i < tags.length - 1) {
+        out.push(ts.text("mono", "/", x + sep / 2, 404, size, { anchor: "middle", opacity: 0.4 }));
+        x += sep;
+      }
+    });
   }
 
-  // 連絡先（存在するものを順に 3 つの枠へ）
+  // 連絡先（存在するものを順に: 左 1 行目 → 左 2 行目 → 右 1 行目）
   const items = [f.email, f.githubId && `github.com/${f.githubId}`, f.xId && `@${f.xId}`].filter(Boolean) as string[];
   const slots = [
-    { x: 52, y: 468, max: 590 },
-    { x: 52, y: 504, max: 440 },
-    { x: 520, y: 504, max: 338 },
+    { x: L, y: 466, max: 480, anchor: "start" as const },
+    { x: L, y: 502, max: 480, anchor: "start" as const },
+    { x: R, y: 466, max: 280, anchor: "end" as const },
   ];
   items.forEach((t, i) => {
     const s = slots[i];
-    out.push(ts.text("mono", t, s.x, s.y, fitSize(ts, "mono", t, 21, s.max, 14)));
+    out.push(ts.text("mono", t, s.x, s.y, fitSize(ts, "mono", t, 20, s.max, 14), { fill: SOFT, anchor: s.anchor }));
   });
 
-  out.push(barcode(668, 448, 190, 30, f.id));
   return out.join("\n  ");
 }
 
 /* ────────────────────────────────────────────────────────────
- *  裏面
+ *  裏面（QR だけが目立つ。それ以外は静かに）
  * ──────────────────────────────────────────────────────────── */
 
 function back(ts: Typesetter, qrUrl: string): string {
   const out: string[] = [];
-  out.push(`<rect x="${-BLEED}" y="${-BLEED}" width="${520 + BLEED}" height="${550 + 2 * BLEED}" fill="${PAPER}"/>`);
-  out.push(qr(qrUrl || "https://example.com", 42, 48, 466));
+  const cx = 455;
 
-  out.push(ts.text("display", "SCAN", 560, 150, 96, { tracking: 2 }));
-  out.push(ts.text("display", "ME", 560, 236, 96, { fill: "none", stroke: PAPER, strokeWidth: 2.4, tracking: 2 }));
-  out.push(`<rect x="560" y="266" width="300" height="5" fill="${PAPER}"/>`);
-  const tagline = "読み取って、つながる。";
-  out.push(ts.text("jp", tagline, 560, 312, fitSize(ts, "jp", tagline, 26, 310, 18)));
+  const cta = "プロフィールとリンクを見る →";
+  out.push(ts.text("jpBold", cta, cx, 96, fitSize(ts, "jpBold", cta, 26, 760, 18), { anchor: "middle" }));
 
-  const [host, path = ""] = qrUrl.replace(/^https?:\/\//, "").split(/(?=\/p\/)/);
-  if (host) out.push(ts.text("mono", host, 560, 350, fitSize(ts, "mono", host, 18, 310, 12), { fill: SOFT }));
-  if (path) out.push(ts.text("mono", path, 560, 376, fitSize(ts, "mono", path, 18, 310, 12)));
+  // QR は白い角丸パネルいっぱい（パネルの余白がそのまま QR の静かな領域になる）
+  const pw = 270;
+  const px = cx - pw / 2;
+  const py = 132;
+  out.push(`<rect x="${px}" y="${py}" width="${pw}" height="${pw}" rx="20" fill="${PAPER}"/>`);
+  out.push(qr(qrUrl || "https://example.com", px, py, pw));
 
-  out.push(halftone(560, 410, 300, 60));
-  out.push(barcode(560, 480, 300, 34, qrUrl));
+  const shown = qrUrl.replace(/^https?:\/\//, "");
+  if (shown) {
+    out.push(ts.text("mono", shown, cx, 452, fitSize(ts, "mono", shown, 17, 760, 11), { anchor: "middle", fill: SOFT, opacity: 0.7 }));
+  }
   return out.join("\n  ");
 }
 
 /* ────────────────────────────────────────────────────────────
- *  装飾・QR
+ *  QR
  * ──────────────────────────────────────────────────────────── */
-
-/** ハーフトーン（左が大きく右へ小さくなる網点） */
-function halftone(x0: number, y0: number, w: number, h: number): string {
-  const step = 14;
-  let d = "";
-  for (let i = 0; i * step <= w; i++) {
-    for (let j = 0; j * step <= h; j++) {
-      const r = (1 - (i * step) / 350) * 5.2 * (1 - ((j * step) / 160) * 0.35);
-      if (r > 0.5) d += `<circle cx="${x0 + i * step}" cy="${y0 + j * step}" r="${num(r)}"/>`;
-    }
-  }
-  return `<g fill="${PAPER}" fill-opacity=".9">${d}</g>`;
-}
-
-/** 文字列から決まる擬似バーコード（メンバーごとに柄が変わる） */
-function barcode(x: number, y: number, w: number, h: number, seed: string): string {
-  let a = 2166136261;
-  for (const ch of seed) a = Math.imul(a ^ ch.charCodeAt(0), 16777619);
-  const rnd = () => {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-  let d = "";
-  for (let cx = x; cx < x + w; ) {
-    const bw = 2 + Math.floor(rnd() * 4);
-    d += `<rect x="${cx}" y="${y}" width="${Math.min(bw, x + w - cx)}" height="${h}"/>`;
-    cx += bw + 2 + Math.floor(rnd() * 3);
-  }
-  return `<g fill="${PAPER}">${d}</g>`;
-}
 
 /** 実データの QR（丸みのあるモジュール。ファインダーは 1:1:3:1:1 比を厳守）。size は 4 モジュールの余白を含む */
 function qr(text: string, ox: number, oy: number, size: number): string {

@@ -10,12 +10,14 @@ import { parse, type Font } from "opentype.js";
 
 /** 名刺で使う書体（見た目を変えるときはここを書き換える） */
 export const FONTS = {
-  /** 英字の見出し（TECH CLUB / 英名 / SCAN ME） */
-  display: { family: "Archivo Black", weight: 400 },
-  /** 日本語（氏名・肩書き・キャッチコピー） */
+  /** 英字の見出し・英名（Tech Club / Haru Kawamoto / 肩書きの英語）。主張しすぎない中太のグロテスク */
+  display: { family: "Inter", weight: 700 },
+  /** 日本語の氏名（極太。名刺で唯一の主役） */
   jp: { family: "Noto Sans JP", weight: 900 },
-  /** 等幅（連絡先・スキル・URL・ラベル） */
-  mono: { family: "Space Mono", weight: 700 },
+  /** 日本語の肩書き・案内文（太字） */
+  jpBold: { family: "Noto Sans JP", weight: 700 },
+  /** 等幅（連絡先・スキル・URL・ID） */
+  mono: { family: "IBM Plex Mono", weight: 500 },
 } as const;
 
 export type FontName = keyof typeof FONTS;
