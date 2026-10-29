@@ -18,6 +18,8 @@ export const FONTS = {
   jpBold: { family: "Noto Sans JP", weight: 700 },
   /** 等幅（連絡先・スキル・URL・ID） */
   mono: { family: "IBM Plex Mono", weight: 500 },
+  /** ドット絵風（裏面の円の文字・校名。ホーディーの書体に合わせた） */
+  pixel: { family: "Pixelify Sans", weight: 600 },
 } as const;
 
 export type FontName = keyof typeof FONTS;
@@ -86,6 +88,11 @@ export interface Typesetter {
   width(font: FontName, text: string, size: number, tracking?: number): number;
   /** 文字を <g><path/></g> として返す（baseline は y） */
   text(font: FontName, text: string, x: number, y: number, size: number, o?: PaintOpts): string;
+  /**
+   * 文字を円（中心 cx,cy・半径 r の円周が baseline）に沿って時計回りに並べる。字の上側が円の外を向く。
+   * centerDeg は文字列の中心の角度（真上が 0°、時計回り）
+   */
+  arc(font: FontName, text: string, cx: number, cy: number, r: number, centerDeg: number, size: number, o?: PaintOpts): string;
 }
 
 /** 1 回目の「どの書体でどの文字を使うか」を集めるだけの組版。描画はしない */
@@ -101,6 +108,9 @@ export class CollectingTypesetter implements Typesetter {
   text(font: FontName, text: string, _x: number, _y: number, size: number, o: PaintOpts = {}): string {
     this.width(font, text, size, o.tracking);
     return "";
+  }
+  arc(font: FontName, text: string, _cx: number, _cy: number, _r: number, _deg: number, size: number, o: PaintOpts = {}): string {
+    return this.text(font, text, 0, 0, size, o);
   }
 }
 
@@ -152,6 +162,38 @@ export class OutlineTypesetter implements Typesetter {
       `fill="${fill}"` +
       (o.stroke ? ` stroke="${o.stroke}" stroke-width="${num(o.strokeWidth ?? 1)}" stroke-linejoin="round"` : "") +
       (o.opacity !== undefined && o.opacity !== 1 ? ` opacity="${o.opacity}"` : "");
+    return `<g role="img" aria-label="${esc(text)}"><path ${attrs} d="${d}"/></g>`;
+  }
+
+  arc(name: FontName, text: string, cx: number, cy: number, r: number, centerDeg: number, size: number, o: PaintOpts = {}): string {
+    if (!text) return "";
+    const font = this.fonts[name];
+    const tracking = o.tracking ?? 0;
+    const chars = [...text];
+    let s = -this.width(name, text, size, tracking) / 2; // 文字列の中心からの弧の長さ
+    let d = "";
+    chars.forEach((ch, i) => {
+      const g = font.charToGlyph(ch);
+      const adv = this.advance(font, ch, size);
+      if (ch.trim() !== "") {
+        // 1 文字ぶんの輪郭を、その位置の接線方向に合わせて回して置く
+        const th = ((centerDeg + (((s + adv / 2) / r) * 180) / Math.PI) * Math.PI) / 180;
+        const [sin, cos] = [Math.sin(th), Math.cos(th)];
+        const px = cx + r * sin;
+        const py = cy - r * cos;
+        const rot = (x: number, y: number): [number, number] => [px + x * cos - y * sin, py + x * sin + y * cos];
+        const path = g.getPath(-adv / 2, 0, size);
+        for (const c of path.commands) {
+          if (c.x !== undefined && c.y !== undefined) [c.x, c.y] = rot(c.x, c.y);
+          if (c.x1 !== undefined && c.y1 !== undefined) [c.x1, c.y1] = rot(c.x1, c.y1);
+          if (c.x2 !== undefined && c.y2 !== undefined) [c.x2, c.y2] = rot(c.x2, c.y2);
+        }
+        d += path.toPathData(2);
+      }
+      s += adv;
+      if (i < chars.length - 1) s += tracking + (font.getKerningValue(g, font.charToGlyph(chars[i + 1])) * size) / font.unitsPerEm;
+    });
+    const attrs = `fill="${o.fill ?? "#fff"}"` + (o.opacity !== undefined && o.opacity !== 1 ? ` opacity="${o.opacity}"` : "");
     return `<g role="img" aria-label="${esc(text)}"><path ${attrs} d="${d}"/></g>`;
   }
 }

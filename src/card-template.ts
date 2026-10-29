@@ -9,9 +9,9 @@
  * - 黒は #0a0a0c（画面用）。印刷所には「リッチブラック（K100 + C/M/Y 少量）」を指定するときれいに出る
  */
 import { encode } from "uqr";
-import { board, CHIP } from "./circuit";
 import { buildTypesetter, fitSize, googleFontLoader, type FontLoader, type Typesetter } from "./fonts";
 import { LOGO_HEIGHT, LOGO_WHITE_DATA_URI, LOGO_WIDTH } from "./logo";
+import { backdrop, PANEL, SCHOOL, SEAL, SEAL_LOGO_HEIGHT, seal } from "./seal";
 
 const INK = "#0a0a0c";
 const PAPER = "#ffffff";
@@ -192,21 +192,21 @@ function front(ts: Typesetter, f: CardFields): string {
 }
 
 /* ────────────────────────────────────────────────────────────
- *  裏面（QR を載せた IC を中心にした基板。src/circuit.ts）
+ *  裏面（円形のエンブレム「SEAL」+ QR。絵は src/seal.ts）
  * ──────────────────────────────────────────────────────────── */
 
 function back(ts: Typesetter, qrUrl: string): string {
-  const out: string[] = [frame(), board(ts)];
+  const out: string[] = [backdrop(), frame(), seal(ts)];
 
-  // U1 の中に QR（白い角丸パネルいっぱい。パネルの余白がそのまま QR の静かな領域になる）
-  const pw = 270;
-  const px = (CHIP.x0 + CHIP.x1) / 2 - pw / 2;
-  const py = (CHIP.y0 + CHIP.y1) / 2 - pw / 2;
-  out.push(`<rect x="${px}" y="${py}" width="${pw}" height="${pw}" rx="20" fill="${PAPER}"/>`);
-  out.push(qr(qrUrl || "https://example.com", px, py, pw));
+  // 円の中心に大きなロゴ（剣先としっぽが輪まで届く）
+  const lw = (SEAL_LOGO_HEIGHT * LOGO_WIDTH) / LOGO_HEIGHT;
+  out.push(logo(SEAL.cx - lw / 2, SEAL.cy - SEAL_LOGO_HEIGHT / 2, lw));
 
-  // 左下の部品枠にロゴ
-  out.push(logo(79, 452, 32));
+  // 右に QR（白い角丸パネルいっぱい。パネルの余白がそのまま QR の静かな領域になる）
+  const { x, y, size } = PANEL;
+  out.push(`<rect x="${x}" y="${y}" width="${size}" height="${size}" rx="20" fill="${PAPER}"/>`);
+  out.push(qr(qrUrl || "https://example.com", x, y, size));
+  out.push(ts.text("pixel", SCHOOL, x + size / 2, 452, 24, { anchor: "middle" }));
   return out.join("\n  ");
 }
 

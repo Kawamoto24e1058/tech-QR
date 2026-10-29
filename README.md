@@ -101,10 +101,10 @@ if(prop("Role") == "メンバー", "Member", "")))))))
 | 面 | 内容 |
 | --- | --- |
 | 表 | ロゴ + `Tech Club` / `DEV TEAM / <ID>`、氏名（超極太）、英名 \| 肩書き（同じ行）、スキル（先頭 3 つ、枠だけのピル）、連絡先（メール・GitHub・X をアイコン付きで） |
-| 裏 | QR（`<PUBLIC_BASE_URL>/p/<id>`）を載せた IC（U1）を中心にした基板の絵（ピンヘッダ・IC・水晶・抵抗/コンデンサ・差動ペア・蛇行配線・ビア・ベタ・取り付け穴、基準番号はシルク印刷風）。絵は `src/circuit.ts` |
+| 裏 | 円形のエンブレム「SEAL」（中央にロゴ。円の外に 5 つの言葉 Rational / Altruistic / Thorough / Innovative / Skeptical、円の中に校訓の一文を一周）と、右に QR（`<PUBLIC_BASE_URL>/p/<id>`）の白いパネル。背景は波紋・ドット格子・QR につながる配線。絵は `src/seal.ts` |
 
 - **文字はすべてアウトライン（図形）で出力**します。入稿データでフォントが変わる・文字化けする心配がなく、Illustrator でのアウトライン化も不要です。
-  サーバーが Google Fonts から「その名刺に使う文字だけ」の小さなフォントを取得して輪郭を取り出し（`src/fonts.ts`）、結果は 1 週間キャッシュします。書体は Inter Bold（英字）/ Noto Sans JP Black・Bold（氏名・肩書き・案内文）/ IBM Plex Mono Medium（連絡先・スキル・URL）。
+  サーバーが Google Fonts から「その名刺に使う文字だけ」の小さなフォントを取得して輪郭を取り出し（`src/fonts.ts`）、結果は 1 週間キャッシュします。書体は Inter Bold（英字）/ Noto Sans JP Black・Bold（氏名・肩書き・案内文）/ IBM Plex Mono Medium（連絡先・スキル・URL）/ Pixelify Sans SemiBold（裏面の円の文字・校名。ドット絵）。
 - **塗り足し 3mm 付き（97×61mm）が既定**です（`/generate/:id`）。仕上がりサイズちょうど（91×55mm）が必要なら `?bleed=0`。プレビュー画面は仕上がりサイズで表示します。
 - 長い氏名・メールなどは**自動で文字サイズを縮めて**収めます（下限あり）。
 - 印刷の最小文字サイズは約 4.8pt（反転の小ラベル）、連絡先は約 6pt。文字・ロゴは仕上がり線から 3mm 以上内側に置いています。

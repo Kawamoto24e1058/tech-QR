@@ -2,7 +2,17 @@
  * opentype.js の型（使う部分だけ）。公式の @types は DOM の型を巻き込んで Workers の型と衝突するため自前で宣言。
  */
 declare module "opentype.js" {
+  export interface PathCommand {
+    type: string;
+    x?: number;
+    y?: number;
+    x1?: number;
+    y1?: number;
+    x2?: number;
+    y2?: number;
+  }
   export interface Path {
+    commands: PathCommand[];
     toPathData(decimalPlaces: number): string;
   }
   export interface Glyph {

@@ -265,8 +265,11 @@ describe("GET /generate/:id/back", () => {
     expect(svg).toContain('<use href="#lg"'); // ロゴ
     // QR modules are rendered in the dark ink colour
     expect(svg).toContain('<g fill="#0a0a0c">');
-    // 基板のシルク印刷（アウトライン化された文字）
-    expect(svg).toContain('aria-label="U1"');
+    // 円の文字（5 つの言葉・校訓・校名）はアウトライン化されている
+    for (const t of ["Rational", "Altruistic", "Thorough", "Innovative", "Skeptical", "We live to create a future", "that has yet to be seen.", "St. Andrew&#39;s University"]) {
+      expect(svg).toContain(`aria-label="${t}"`);
+    }
+    expect(svg).not.toContain("font-family");
   });
 
   it("accepts /back.svg", async () => {
@@ -293,10 +296,10 @@ describe("GET /generate/:id/back", () => {
     const url = "https://qr.test/p/haruharu";
     const { data, size: n } = encode(url, { ecc: "Q", border: 0 });
 
-    // back() の qr(url, px, py, pw) = qr(url, 320, 140, 270)
-    const OX = 320;
-    const OY = 140;
-    const SIZE = 270;
+    // back() の qr(url, x, y, size) = qr(url, 578, 160, 230)（src/seal.ts の PANEL）
+    const OX = 578;
+    const OY = 160;
+    const SIZE = 230;
     const quiet = 4;
     const cell = SIZE / (n + quiet * 2);
     const inFinder = (r: number, c: number) =>
