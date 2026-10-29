@@ -482,8 +482,8 @@ const JS = String.raw`
 
     /* 基本（ID・公開） */
     var s1 = mk('section', 'sec'); s1.appendChild(mk('h3', '', '基本設定'));
-    var idIn = textIn('id', { readonly: !isNew, mono: true, max: 64, ph: 'taro' });
-    s1.appendChild(field('ID', idIn, isNew ? 'QRコードの URL に使われます（例: <b>…/p/taro</b>）。半角英数字と . _ - が使えます。<b>あとから変更できません</b>。' : 'QR の URL に使われているため変更できません。', 'id', isNew));
+    var idIn = textIn('id', { mono: true, max: 64, ph: 'taro' });
+    s1.appendChild(field('ID', idIn, isNew ? 'QRコードの URL に使われます（例: <b>…/p/taro</b>）。半角英数字と . _ - が使えます。あとから変更もできます。' : 'QR の URL（<b>…/p/' + esc(S.orig.id) + '</b>）に使われています。変更すると、<b>旧 ID で印刷済みの QR は読み取れなくなります</b>（印刷前なら問題ありません）。', 'id', true));
     var sw = mk('label', 'sw'); var cb = mk('input'); cb.type = 'checkbox'; cb.checked = d.active;
     cb.onchange = function () { d.active = cb.checked; touch('active'); };
     sw.appendChild(cb); sw.appendChild(mk('span', 'knob')); sw.appendChild(mk('span', '', '<b>公開する</b><small>OFF にすると QR・プロフィールが 404 になります</small>'));
@@ -576,10 +576,11 @@ const JS = String.raw`
   /* ── 入力チェック（保存前にその場で）── */
   function problems() {
     var d = S.draft, p = {}; if (!d) return p;
-    if (S.sel === '__new') {
-      if (!d.id.trim()) p.id = '';
-      else if (!ID_RE.test(d.id.trim())) p.id = 'ID は半角英数字と . _ - の 64 文字までです';
-      else if (S.members.some(function (m) { return m.id === d.id.trim(); })) p.id = 'この ID はすでに使われています';
+    var isNew = S.sel === '__new', nid = d.id.trim();
+    if (isNew || nid !== S.orig.id) {
+      if (!nid) p.id = '';
+      else if (!ID_RE.test(nid)) p.id = 'ID は半角英数字と . _ - の 64 文字までです';
+      else if (S.members.some(function (m) { return m.id === nid; })) p.id = 'この ID はすでに使われています';
     }
     if (d.email.trim() && !EMAIL_RE.test(d.email.trim().replace(/^mailto:/i, ''))) p.email = 'メールアドレスの形式が正しくありません';
     var g = normHandle(d.githubId, ['github.com']); if (g && !HANDLE_RE.test(g)) p.githubId = '使えない文字が含まれています（英数字・_ . - のみ）';
@@ -624,7 +625,7 @@ const JS = String.raw`
   function refreshState() {
     var save = $('#save'); if (!save) return;
     var isNew = S.sel === '__new', d = memberDirty(), p = paintProblems(), bad = Object.keys(p).length > 0;
-    save.disabled = S.busy || (!isNew && !d) || (isNew && !S.draft.id.trim()) || bad;
+    save.disabled = S.busy || (!isNew && !d) || (d && !d.id.trim()) || bad;
     save.textContent = S.busy ? '保存中…' : (isNew ? '追加する' : (d ? '保存' : '保存済み'));
     var rv = $('#revert'); if (rv) rv.disabled = !d;
     var n = $('#dnote'); if (n) { n.className = d ? 'dirty-note' : 'saved-note'; n.textContent = d ? '● 未保存の変更があります' : (isNew ? '' : '✓ 最新の状態です'); }
@@ -637,17 +638,24 @@ const JS = String.raw`
     return d;
   }
   function saveMember() {
-    if (S.busy) return; clearErrors();
-    var isNew = S.sel === '__new'; S.busy = true; refreshState();
-    var req = isNew ? api('POST', '/admin/api/members', payload()) : api('PATCH', '/admin/api/members/' + encodeURIComponent(S.draft.id), payload());
-    req.then(function (j) {
-      var m = j.member, i = -1;
-      S.members.forEach(function (x, k) { if (x.id === m.id) i = k; });
-      if (i >= 0) S.members[i] = m; else { S.members.push(m); S.members.sort(function (a, b) { return a.id < b.id ? -1 : 1; }); }
-      S.sel = m.id; S.draft = clone(m); S.orig = clone(m); S.mode = m.targetUrl ? 'redirect' : 'profile'; S.touched = {};
-      refreshUsage(); toast(isNew ? 'メンバーを追加しました' : '保存しました。QR・プロフィールにすぐ反映されます', 'ok');
-      lastDirty = null; renderMembers();
-    }).catch(function (e) { showError(e.field, e.message); }).then(function () { S.busy = false; refreshState(); });
+    if (S.busy) return;
+    var isNew = S.sel === '__new', oldId = isNew ? '' : S.orig.id, newId = S.draft.id.trim();
+    var run = function () {
+      clearErrors(); S.busy = true; refreshState();
+      var d = payload(); d.id = newId;
+      var req = isNew ? api('POST', '/admin/api/members', d) : api('PATCH', '/admin/api/members/' + encodeURIComponent(oldId), d);
+      req.then(function (j) {
+        var m = j.member;
+        S.members = S.members.filter(function (x) { return x.id !== oldId && x.id !== m.id; });
+        S.members.push(m); S.members.sort(function (a, b) { return a.id < b.id ? -1 : 1; });
+        S.sel = m.id; S.draft = clone(m); S.orig = clone(m); S.mode = m.targetUrl ? 'redirect' : 'profile'; S.touched = {};
+        refreshUsage(); toast(isNew ? 'メンバーを追加しました' : '保存しました。QR・プロフィールにすぐ反映されます', 'ok');
+        lastDirty = null; renderMembers();
+      }).catch(function (e) { showError(e.field, e.message); }).then(function () { S.busy = false; refreshState(); });
+    };
+    if (!isNew && newId !== oldId) {
+      ask('ID を「' + oldId + '」から「' + newId + '」に変更します。旧 ID の QR・URL（/p/' + oldId + '）は 404 になります。名刺を印刷済みなら刷り直しが必要です。', '変更する', true).then(function (ok) { if (ok) run(); });
+    } else run();
   }
   function deleteMember() {
     var d = S.draft;

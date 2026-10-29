@@ -148,9 +148,9 @@ export async function createMember(i: MemberInput, env: NotionEnv): Promise<Memb
   return toMember(page);
 }
 
-/** ID は URL（印刷済みQR）の鍵なので更新しない */
-export async function updateMember(pageId: string, i: MemberInput, env: NotionEnv): Promise<Member> {
-  const page = await call(env, "PATCH", `/pages/${pageId}`, { properties: toProperties(i, false) });
+/** ID（= QR の URL の鍵）は renameId を true にしたときだけ書き換える */
+export async function updateMember(pageId: string, i: MemberInput, env: NotionEnv, renameId = false): Promise<Member> {
+  const page = await call(env, "PATCH", `/pages/${pageId}`, { properties: toProperties(i, renameId) });
   return toMember(page);
 }
 

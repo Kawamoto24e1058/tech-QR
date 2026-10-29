@@ -102,10 +102,17 @@ async function api(request: Request, env: Env, path: string, method: string): Pr
 
     if (method === "PATCH") {
       const roles = (await getRoles(env)).roles;
-      const parsed = parseInput({ ...((await readJson(request)) as object), id }, roles, false);
+      // body の id が違えば ID の変更（旧 ID の URL は使えなくなる）
+      const body = { id, ...((await readJson(request)) as object) };
+      const parsed = parseInput(body, roles, false);
       if ("error" in parsed) return json(parsed, 422);
-      const updated = await updateMember(current.pageId, parsed.value, env);
+      const renamed = parsed.value.id !== id;
+      if (renamed && (await getMember(parsed.value.id, env))) {
+        return json({ error: "この ID はすでに使われています", field: "id" }, 409);
+      }
+      const updated = await updateMember(current.pageId, parsed.value, env, renamed);
       await invalidateMember(id);
+      if (renamed) await invalidateMember(parsed.value.id);
       return json({ member: toEdit(updated) });
     }
     if (method === "DELETE") {
@@ -219,7 +226,7 @@ function parseInput(
 
   const id = str(b.id);
   if (!ID_PATTERN.test(id)) {
-    return fail("id", creating ? "ID は半角英数字と . _ - の 64 文字までで入力してください" : "不正な ID です");
+    return fail("id", "ID は半角英数字と . _ - の 64 文字までで入力してください");
   }
 
   const targetUrl = str(b.targetUrl);

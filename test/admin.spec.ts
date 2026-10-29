@@ -350,15 +350,15 @@ describe("/admin/api/members", () => {
     expect(notion.pages.length).toBe(1); // 何も書き込まれていない
   });
 
-  it("updates a member (ID is the URL key and can never change) and busts the public cache", async () => {
+  it("updates a member and busts the public cache", async () => {
     notion.add("haru", { nameJp: "旧名", role: "メンバー", targetUrl: "https://example.org/old" });
     const cookie = await login();
 
     // 転送 -> プロフィールに切り替え（targetUrl を空に）
-    const res = await api(cookie, "PATCH", "/admin/api/members/haru", member({ id: "hijack", nameJp: "新名", role: "部長", targetUrl: "" }));
+    const res = await api(cookie, "PATCH", "/admin/api/members/haru", member({ id: "haru", nameJp: "新名", role: "部長", targetUrl: "" }));
     expect(res.status).toBe(200);
     const { member: m } = (await res.json()) as any;
-    expect(m.id).toBe("haru"); // body の id は無視される
+    expect(m.id).toBe("haru");
     expect(m.nameJp).toBe("新名");
     expect(m.roleEn).toBe("President");
     expect(notion.pages[0].props.ID.title[0].plain_text).toBe("haru");
@@ -368,10 +368,36 @@ describe("/admin/api/members", () => {
     expect(await pub.text()).toContain("新名");
   });
 
+  it("renames a member's ID: the old URL stops working and the new one works", async () => {
+    notion.add("haruharu", { nameJp: "川本" });
+    notion.add("taro", { nameJp: "太郎" });
+    const cookie = await login();
+    expect((await req("/p/haruharu")).status).toBe(200); // キャッシュに載せる
+
+    const res = await api(cookie, "PATCH", "/admin/api/members/haruharu", member({ id: "haru", nameJp: "川本" }));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as any).member.id).toBe("haru");
+    expect(notion.pages[0].props.ID.title[0].plain_text).toBe("haru");
+    expect((await req("/p/haru")).status).toBe(200);
+    expect((await req("/p/haruharu")).status).toBe(404);
+  });
+
+  it("refuses to rename onto an existing ID or to an invalid one", async () => {
+    notion.add("haruharu", { nameJp: "川本" });
+    notion.add("taro", { nameJp: "太郎" });
+    const cookie = await login();
+    const dup = await api(cookie, "PATCH", "/admin/api/members/haruharu", member({ id: "taro" }));
+    expect(dup.status).toBe(409);
+    expect(((await dup.json()) as any).field).toBe("id");
+    const bad = await api(cookie, "PATCH", "/admin/api/members/haruharu", member({ id: "bad id!" }));
+    expect(bad.status).toBe(422);
+    expect(notion.pages[0].props.ID.title[0].plain_text).toBe("haruharu");
+  });
+
   it("switches the QR landing to a redirect when a target URL is saved", async () => {
     notion.add("haru", { nameJp: "川本" });
     const cookie = await login();
-    await api(cookie, "PATCH", "/admin/api/members/haru", member({ targetUrl: "https://example.org/me" }));
+    await api(cookie, "PATCH", "/admin/api/members/haru", member({ id: "haru", targetUrl: "https://example.org/me" }));
     const pub = await req("/p/haru");
     expect(pub.status).toBe(302);
     expect(pub.headers.get("Location")).toBe("https://example.org/me");
@@ -380,7 +406,7 @@ describe("/admin/api/members", () => {
   it("deactivating makes the QR 404; delete archives the Notion page", async () => {
     notion.add("haru", { nameJp: "川本" });
     const cookie = await login();
-    await api(cookie, "PATCH", "/admin/api/members/haru", member({ active: false }));
+    await api(cookie, "PATCH", "/admin/api/members/haru", member({ id: "haru", active: false }));
     expect((await req("/p/haru")).status).toBe(404);
 
     const del = await api(cookie, "DELETE", "/admin/api/members/haru");
