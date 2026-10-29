@@ -6,6 +6,7 @@
  * 見やすさの方針: 文字は大きめ・コントラスト高め / 入力しながら名刺プレビューが更新される /
  * 保存前にその場で入力チェック / 一覧は絞り込み・肩書き・未保存が分かる。
  */
+import { gridToTable } from "./pdf-grid";
 import { escapeXml } from "./card-template";
 
 const CSS = `
@@ -998,13 +999,13 @@ const JS = String.raw`
     var app = $('#app'); app.innerHTML = '';
     var v = mk('div', 'iview');
     v.appendChild(mk('h2', '', '名簿の取り込み'));
-    v.appendChild(mk('p', 'lead', 'Excel（.xlsx）か CSV の名簿を選ぶと、メンバーをまとめて登録・更新できます。1 行目は見出し、2 行目から 1 人ずつにしてください。' +
+    v.appendChild(mk('p', 'lead', 'Excel（.xlsx）・CSV・表の PDF の名簿を選ぶと、メンバーをまとめて登録・更新できます。1 行目は見出し、2 行目から 1 人ずつにしてください。' +
       '<br><b>役職がある人は名刺を自動で作ります</b>。役職のない部員は、名簿に「名刺希望」の列（○など）があればその人だけ、なければあとから「メンバー」タブで選べます。' +
       '<br>ID（QR の URL）は、名簿に ID 列があればそれを、なければメールアドレス（@andrew.ac.jp）の @ より前を使います。'));
     var pick = mk('div', 'pick');
-    var fi = mk('input'); fi.type = 'file'; fi.id = 'ifile'; fi.accept = '.xlsx,.csv,.tsv,.txt,text/csv';
+    var fi = mk('input'); fi.type = 'file'; fi.id = 'ifile'; fi.accept = '.xlsx,.csv,.tsv,.txt,.pdf,text/csv,application/pdf';
     var fb = mk('button', 'btn primary', 'ファイルを選ぶ'); fb.type = 'button'; fb.onclick = function () { fi.click(); };
-    var fn = mk('span', 'fname', S.imp ? esc(S.imp.name) : '.xlsx / .csv（2MB まで・先頭のシートだけ読みます）');
+    var fn = mk('span', 'fname', S.imp ? esc(S.imp.name) : '.xlsx / .csv / .pdf（表の PDF も読めます）');
     pick.appendChild(fb); pick.appendChild(fi); pick.appendChild(fn); v.appendChild(pick);
     fi.onchange = function () { var f = fi.files && fi.files[0]; if (f) loadRoster(f); };
     var body = mk('div'); body.id = 'ibody'; v.appendChild(body);
@@ -1012,9 +1013,77 @@ const JS = String.raw`
     if (S.imp && S.imp.parsed) drawImport();
   }
 
+  /* PDF の名簿: pdf.js（ブラウザの中で動かす。ファイルは外へ出ません）で文字と罫線を取り出して、表（CSV）にしてから読み込む */
+  var PDFJS = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/';
+  var pdfLib = null;
+  function loadPdfJs() {
+    if (pdfLib) return Promise.resolve(pdfLib);
+    return import(PDFJS + 'pdf.min.mjs').then(function (lib) {
+      return fetch(PDFJS + 'pdf.worker.min.mjs').then(function (r) { return r.text(); }).then(function (t) {
+        lib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(new Blob([t], { type: 'text/javascript' }));
+        pdfLib = lib; return lib;
+      });
+    });
+  }
+  /*PDFGRID*/
+  function matMul(a, b) { return [a[0] * b[0] + a[2] * b[1], a[1] * b[0] + a[3] * b[1], a[0] * b[2] + a[2] * b[3], a[1] * b[2] + a[3] * b[3], a[0] * b[4] + a[2] * b[5] + a[4], a[1] * b[4] + a[3] * b[5] + a[5]]; }
+  function pdfPageLines(lib, page) { // 罫線（縦・横の線分）を取り出す
+    var OPS = lib.OPS, H = [], V = [];
+    return page.getOperatorList().then(function (ol) {
+      var ctm = [1, 0, 0, 1, 0, 0], stack = [];
+      function pt(x, y) { return [ctm[0] * x + ctm[2] * y + ctm[4], ctm[1] * x + ctm[3] * y + ctm[5]]; }
+      function seg(p, q) {
+        if (!p || !q) return; var dx = Math.abs(p[0] - q[0]), dy = Math.abs(p[1] - q[1]);
+        if (dy < 0.6 && dx > 8) H.push({ y: (p[1] + q[1]) / 2, x0: Math.min(p[0], q[0]), x1: Math.max(p[0], q[0]) });
+        else if (dx < 0.6 && dy > 8) V.push({ x: (p[0] + q[0]) / 2, y0: Math.min(p[1], q[1]), y1: Math.max(p[1], q[1]) });
+      }
+      ol.fnArray.forEach(function (f, i) {
+        var a = ol.argsArray[i];
+        if (f === OPS.save) stack.push(ctm.slice());
+        else if (f === OPS.restore) ctm = stack.pop() || ctm;
+        else if (f === OPS.transform) ctm = matMul(ctm, a);
+        else if (f === OPS.constructPath) {
+          var ops = a[0], co = a[1], k = 0, cur = null, start = null;
+          ops.forEach(function (op) {
+            if (op === OPS.moveTo) { cur = pt(co[k], co[k + 1]); start = cur; k += 2; }
+            else if (op === OPS.lineTo) { var n = pt(co[k], co[k + 1]); k += 2; seg(cur, n); cur = n; }
+            else if (op === OPS.rectangle) { var p1 = pt(co[k], co[k + 1]), p2 = pt(co[k] + co[k + 2], co[k + 1] + co[k + 3]); k += 4; seg(p1, [p2[0], p1[1]]); seg([p2[0], p1[1]], p2); seg(p2, [p1[0], p2[1]]); seg([p1[0], p2[1]], p1); }
+            else if (op === OPS.closePath) { seg(cur, start); cur = start; }
+            else if (op === OPS.curveTo) k += 6; else if (op === OPS.curveTo2 || op === OPS.curveTo3) k += 4;
+          });
+        }
+      });
+      return { H: H, V: V };
+    });
+  }
+  function csvOf(rows) { return rows.map(function (r) { return r.map(function (c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(','); }).join('\r\n'); }
+  function pdfToCsv(buf) {
+    return loadPdfJs().then(function (lib) {
+      return lib.getDocument({ data: new Uint8Array(buf.slice(0)) }).promise.then(function (doc) {
+        var pages = Math.min(doc.numPages, 30), all = [], p = 0;
+        function next() {
+          if (p >= pages) return Promise.resolve();
+          return doc.getPage(++p).then(function (page) {
+            return Promise.all([pdfPageLines(lib, page), page.getTextContent()]).then(function (r) {
+              var items = r[1].items.filter(function (it) { return typeof it.str === 'string'; }).map(function (it) { return { x: it.transform[4], y: it.transform[5], w: it.width, h: it.height, s: it.str }; });
+              [].push.apply(all, gridToTable(items, r[0].H, r[0].V));
+            });
+          }).then(next);
+        }
+        return next().then(function () { return all; });
+      });
+    }).then(function (rows) {
+      if (!rows.length) throw new Error('PDF から表を読み取れませんでした（罫線のある表の PDF にしてください。画像のスキャンは読めません）');
+      return new TextEncoder().encode(csvOf(rows)).buffer;
+    });
+  }
+
   function loadRoster(file) {
-    if (file.size > 2 * 1024 * 1024) { toast('ファイルが大きすぎます（2MB まで）', 'err'); return; }
-    file.arrayBuffer().then(function (buf) { S.imp = { name: file.name, buf: buf, parsed: null, rows: [], map: null, result: null }; return parseRoster(null); })
+    if (file.size > 8 * 1024 * 1024) { toast('ファイルが大きすぎます（PDF は 8MB、それ以外は 2MB まで）', 'err'); return; }
+    var isPdf = /\.pdf$/i.test(file.name) || file.type === 'application/pdf';
+    if (!isPdf && file.size > 2 * 1024 * 1024) { toast('ファイルが大きすぎます（2MB まで）', 'err'); return; }
+    if (isPdf) toast('PDF を読み取っています…');
+    file.arrayBuffer().then(function (b) { return isPdf ? pdfToCsv(b) : b; }).then(function (buf) { S.imp = { name: file.name, buf: buf, parsed: null, rows: [], map: null, result: null }; return parseRoster(null); })
       .catch(function (e) { S.imp = null; renderImport(); toast(e.message, 'err'); });
   }
   function parseRoster(map, header) {
@@ -1208,7 +1277,7 @@ const JS = String.raw`
   window.addEventListener('beforeunload', function (e) { if (dirty()) { e.preventDefault(); e.returnValue = ''; } });
   load();
 })();
-`;
+`.replace("/*PDFGRID*/", gridToTable.toString());
 
 export function buildAdminPage(base: string): string {
   return shell(
