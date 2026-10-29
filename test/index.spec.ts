@@ -159,7 +159,7 @@ describe("GET /generate/:id (front)", () => {
     expect(svg).toContain('width="97mm" height="61mm"');
     expect(svg).not.toContain("<text");
     expect(svg).not.toContain("font-family");
-    for (const label of ["山田 太郎", "TARO YAMADA", "部長", "CLUB PRESIDENT", "github.com/taro", "@taro_dev", "[ TypeScript ]", "[ Cloudflare ]", "ID / HARUHARU"]) {
+    for (const label of ["山田 太郎", "TARO YAMADA", "部長", "CLUB PRESIDENT", "github.com/taro", "@taro_dev", "TypeScript", "Cloudflare", "DEV TEAM / HARUHARU"]) {
       expect(svg, label).toContain(`aria-label="${label}"`);
     }
     expect(svg).not.toContain("{{");
@@ -221,8 +221,8 @@ describe("card rendering edge cases", () => {
     const svg = await (await call("/generate/bare")).text();
     expect(svg).toContain('aria-label="無名"');
     expect(svg).not.toContain('aria-label="github');
-    expect(svg).not.toContain("[ ");
-    expect(svg).toContain('aria-label="ID / BARE"'); // ID だけは常に出る
+    expect(svg).not.toContain("TypeScript");
+    expect(svg).toContain('aria-label="DEV TEAM / BARE"'); // ID だけは常に出る
   });
 
   it("shrinks a very long name / email to stay inside the card instead of overflowing", async () => {
@@ -262,11 +262,12 @@ describe("GET /generate/:id/back", () => {
 
     const svg = await res.text();
     expect(svg).toContain('viewBox="-30 -30 970 610"');
-    expect(svg).toContain('aria-label="SCAN TO CONNECT"');
+    expect(svg).toContain('aria-label="SCAN"');
     // QR modules are rendered in the dark ink colour
     expect(svg).toContain('<g fill="#0a0a0c">');
     // display URL derived from request origin
-    expect(svg).toContain('aria-label="qr.test/p/haruharu"');
+    expect(svg).toContain('aria-label="qr.test"');
+    expect(svg).toContain('aria-label="/p/haruharu"');
   });
 
   it("accepts /back.svg", async () => {
@@ -293,10 +294,10 @@ describe("GET /generate/:id/back", () => {
     const url = "https://qr.test/p/haruharu";
     const { data, size: n } = encode(url, { ecc: "Q", border: 0 });
 
-    // back() の qr(url, px + 8, py + 8, pw - 16) = qr(url, 323, 120, 264)
-    const OX = 323;
-    const OY = 120;
-    const SIZE = 264;
+    // back() の qr(url, 42, 48, 466)
+    const OX = 42;
+    const OY = 48;
+    const SIZE = 466;
     const quiet = 4;
     const cell = SIZE / (n + quiet * 2);
     const inFinder = (r: number, c: number) =>
@@ -376,7 +377,7 @@ describe("GET /preview/:id", () => {
     expect(html).toContain("山田 太郎");
     // both card SVGs embedded
     expect(html.match(/<svg /g)?.length).toBeGreaterThanOrEqual(2);
-    expect(html).toContain('aria-label="SCAN TO CONNECT"'); // back card present
+    expect(html).toContain('aria-label="SCAN"'); // back card present
     expect(html).toContain('viewBox="0 0 910 550"'); // 画面表示は仕上がりサイズ
     // download links point at the attachment endpoints
     expect(html).toContain('href="/generate/haruharu" download');
