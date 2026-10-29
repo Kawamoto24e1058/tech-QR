@@ -141,7 +141,7 @@ export function buildIndexPage(members: MemberSummary[]): string {
 <body>
 <div class="wrap">
   <h1>名刺プレビュー</h1>
-  <p class="muted">名前をクリックすると表裏の名刺を確認・ダウンロードできます（${members.length} 名）。</p>
+  <p class="muted">名前をクリックすると表裏の名刺を確認・ダウンロードできます（${members.length} 名）。 <a href="/admin">メンバーの編集は管理画面 →</a></p>
   ${body}
 </div>
 </body>

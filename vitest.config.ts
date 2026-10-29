@@ -15,6 +15,8 @@ export default defineConfig({
           CACHE_TTL_SECONDS: "0",
           // 空にしてリクエストの origin(https://qr.test)を使わせる
           PUBLIC_BASE_URL: "",
+          // 管理画面のテスト用パスワード
+          ADMIN_PASSWORD: "test-admin-password",
         },
       },
     }),

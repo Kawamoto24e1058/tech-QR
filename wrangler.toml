@@ -31,3 +31,11 @@ REDIRECT_STATUS = "302"
 CACHE_TTL_SECONDS = "45"
 # 裏面QRに埋め込む公開URLの基点。空ならリクエストのオリジンを使用する
 PUBLIC_BASE_URL = "https://tech-qr.momotech.workers.dev"
+
+# 管理画面ログインの総当たり対策（IP ごとに 1 分 5 回まで）
+[[ratelimits]]
+name = "LOGIN_LIMITER"
+namespace_id = "1001"
+  [ratelimits.simple]
+  limit = 5
+  period = 60

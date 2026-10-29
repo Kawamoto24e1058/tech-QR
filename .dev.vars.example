@@ -23,3 +23,7 @@ CACHE_TTL_SECONDS="45"
 # 裏面QRに埋め込む公開URLの基点（例: https://qr.tech-club.dev）。
 # 空ならローカル開発時は http://localhost:8787 が使われる
 PUBLIC_BASE_URL=""
+
+# 管理画面 /admin のパスワード（部で共通の合言葉。16文字以上の長いものを推奨）
+# 本番は `npx wrangler secret put ADMIN_PASSWORD` で登録する
+ADMIN_PASSWORD="change-me-to-a-long-passphrase"

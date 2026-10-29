@@ -11,12 +11,15 @@
  *   GET /generate/:id      表面 SVG をダウンロード
  *   GET /generate/:id/back 裏面 SVG（メンバー別 QR 入り）をダウンロード
  *   GET /assets/logo.png   ロゴ画像（プロフィールページ用）
+ *   GET /admin             管理画面（パスワードでログイン。メンバーのデータと肩書きを編集）
  *   GET /health            疎通確認
  *   その他                 DEFAULT_REDIRECT_URL へ転送
  */
+import { handleAdmin } from "./admin";
 import { logoPngBytes } from "./assets";
 import { buildBackCard, buildFrontCard, escapeXml } from "./card-template";
-import { getMember, ID_PATTERN, listMembers, type Member } from "./notion";
+import { lookup } from "./lookup";
+import { getMember, ID_PATTERN, listMembers } from "./notion";
 import { buildCardPreview, buildIndexPage } from "./preview";
 import { buildProfilePage } from "./profile";
 
@@ -32,6 +35,10 @@ export type Env = Cloudflare.Env;
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    // 管理画面（認証つき。GET 以外のメソッドもここで扱う）
+    const admin = await handleAdmin(request, env);
+    if (admin) return admin;
+
     const url = new URL(request.url);
     const { pathname } = url;
 
@@ -106,33 +113,6 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 /* ────────────────────────────────────────────────────────────
- *  Notion 参照（QR 読み取りは集中しうるので短命キャッシュ）
- * ──────────────────────────────────────────────────────────── */
-
-async function lookup(id: string, env: Env, ctx: ExecutionContext): Promise<Member | null> {
-  const ttl = toPositiveInt(env.CACHE_TTL_SECONDS);
-  if (ttl === 0) return getMember(id, env);
-
-  const cache = caches.default;
-  const key = new Request(`https://tech-qr.cache/member/${encodeURIComponent(id)}`);
-  const hit = await cache.match(key);
-  if (hit) return (await hit.json()) as Member | null;
-
-  const member = await getMember(id, env);
-  // 「いない」結果も短く覚えて、存在しない ID への連打が Notion に届かないようにする
-  const age = member ? ttl : Math.min(ttl, 15);
-  ctx.waitUntil(
-    cache.put(
-      key,
-      new Response(JSON.stringify(member), {
-        headers: { "Content-Type": "application/json", "Cache-Control": `public, max-age=${age}` },
-      }),
-    ),
-  );
-  return member;
-}
-
-/* ────────────────────────────────────────────────────────────
  *  レスポンス
  * ──────────────────────────────────────────────────────────── */
 
@@ -196,11 +176,6 @@ function notFound(id: string): Response {
 /* ────────────────────────────────────────────────────────────
  *  ユーティリティ
  * ──────────────────────────────────────────────────────────── */
-
-function toPositiveInt(value: string | undefined): number {
-  const n = Number.parseInt(value ?? "", 10);
-  return Number.isFinite(n) && n > 0 ? n : 0;
-}
 
 /** http(s) スキームのみ許可 (javascript:, data: 等を弾く) */
 function isSafeHttpUrl(value: string): boolean {
