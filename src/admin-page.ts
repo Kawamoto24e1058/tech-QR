@@ -625,7 +625,7 @@ const JS = String.raw`
   function refreshState() {
     var save = $('#save'); if (!save) return;
     var isNew = S.sel === '__new', d = memberDirty(), p = paintProblems(), bad = Object.keys(p).length > 0;
-    save.disabled = S.busy || (!isNew && !d) || (d && !d.id.trim()) || bad;
+    save.disabled = S.busy || (!isNew && !d) || (S.draft && !S.draft.id.trim()) || bad;
     save.textContent = S.busy ? '保存中…' : (isNew ? '追加する' : (d ? '保存' : '保存済み'));
     var rv = $('#revert'); if (rv) rv.disabled = !d;
     var n = $('#dnote'); if (n) { n.className = d ? 'dirty-note' : 'saved-note'; n.textContent = d ? '● 未保存の変更があります' : (isNew ? '' : '✓ 最新の状態です'); }
