@@ -125,7 +125,7 @@ describe("申請書形式の名簿（上にタイトル・宛名、途中に別�
   it("uses the first registered role when a cell lists several, and reports the others", () => {
     const h = findHeaderRow(table);
     const rows = buildRows(table, detectColumns(table[h]), ROLES, h);
-    expect(rows[1]).toMatchObject({ role: "副部長", roleExtra: "会計・文サ・渉外", problems: [] });
+    expect(rows[1]).toMatchObject({ role: "副部長", roleExtra: "会計・文サ・渉外", roleUnknown: ["会計", "文サ", "渉外"], problems: [] });
     expect(rows[2].role).toBe("");
     expect(rows[2].problems.join()).toContain("未登録の役職「文サ・渉外」");
     expect(rows[3]).toMatchObject({ role: "", roleRaw: "", problems: [] });

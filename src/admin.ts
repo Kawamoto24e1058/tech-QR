@@ -250,6 +250,7 @@ async function parseRoster(request: Request, env: Env): Promise<Response> {
     roles,
     plain: PLAIN_ROLES,
     headerRow: headerRow + 1,
+    unknownRoles: [...new Set(rows.flatMap((r) => r.roleUnknown))],
     total: table.length - headerRow - 1,
     truncated: table.length - headerRow - 1 > MAX_ROWS,
     rows: rows.map((r) => {

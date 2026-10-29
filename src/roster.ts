@@ -307,6 +307,8 @@ export interface RosterRow {
   roleRaw: string;
   /** 役職が複数書かれていたときの、名刺に使わなかった分（例: 副部長・会計 → 「会計」） */
   roleExtra: string;
+  /** 名簿に書かれている役職のうち、肩書きに登録されていないもの（画面から追加できる） */
+  roleUnknown: string[];
   email: string;
   githubId: string;
   xId: string;
@@ -348,6 +350,7 @@ export function buildRows(table: string[][], map: Mapping, roles: Role[], header
     const roleExtra = found ? tokens.filter((t) => roleByNorm.get(t) !== found).join("・") : "";
     if (tokens.length && !found) problems.push(`未登録の役職「${roleRaw}」です。下で選ぶか、「肩書き」タブで追加してください`);
     const role = found;
+    const roleUnknown = tokens.filter((t) => !roleByNorm.has(t));
 
     out.push({
       line: headerRow + k + 2,
@@ -357,6 +360,7 @@ export function buildRows(table: string[][], map: Mapping, roles: Role[], header
       role,
       roleRaw,
       roleExtra,
+      roleUnknown,
       email,
       githubId: normalizeHandle(clean(cell(r, "githubId")), ["github.com"]),
       xId: normalizeHandle(clean(cell(r, "xId")), ["x.com", "twitter.com"]),
