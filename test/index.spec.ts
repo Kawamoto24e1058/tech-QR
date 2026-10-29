@@ -14,6 +14,7 @@ interface Member {
   Github_ID?: string;
   X_ID?: string;
   SkillTags?: string;
+  Card?: boolean;
 }
 
 function richText(value: string) {
@@ -36,6 +37,7 @@ function toNotionPage(id: string, m: Member) {
       Github_ID: richText(m.Github_ID ?? ""),
       X_ID: richText(m.X_ID ?? ""),
       SkillTags: richText(m.SkillTags ?? ""),
+      Card: { type: "checkbox", checkbox: m.Card ?? false },
     },
   };
 }
@@ -355,6 +357,21 @@ describe("GET /preview", () => {
     expect(html).toContain('href="/preview/sato"');
     expect(html).toContain("Active");
     expect(html).toContain("停止中");
+  });
+
+  it("lists people who get a card first (officers + 名刺希望) and the rest under 名刺なし", async () => {
+    stubNotion({
+      boss: { Name_JP: "部長さん", Role: "部長", active: true },
+      wants: { Name_JP: "希望さん", Role: "部員", Card: true, active: true },
+      plain: { Name_JP: "ふつうさん", Role: "部員", active: true },
+    });
+    const html = await (await call("/preview")).text();
+    const [top, rest] = html.split("名刺なし（");
+    expect(top).toContain("部長さん");
+    expect(top).toContain("希望さん");
+    expect(top).not.toContain("ふつうさん");
+    expect(rest).toContain("ふつうさん");
+    expect(html).toContain("名刺を作る人 2 名");
   });
 });
 

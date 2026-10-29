@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import { ADMIN_CLIENT_JS } from "../src/admin-page";
 import { fakeFontResponse } from "./helpers/fake-fonts";
+import { makeXlsx } from "./helpers/make-xlsx";
 
 const PASSWORD = "test-admin-password";
 
@@ -43,6 +44,7 @@ class FakeNotion {
         Github_ID: rt(p.githubId ?? ""),
         X_ID: rt(p.xId ?? ""),
         SkillTags: rt(p.skills ?? ""),
+        Card: { checkbox: p.card ?? false },
       },
     });
   }
@@ -569,5 +571,114 @@ describe("admin client script", () => {
     const html = await (await req("/admin", { headers: { cookie } })).text();
     expect(html).toContain("function saveMember");
     expect(html).not.toContain("${");
+  });
+});
+
+
+/* ────────────────────────────────────────────────────────────
+ *  名刺希望（Card）と名簿の取り込み
+ * ──────────────────────────────────────────────────────────── */
+
+describe("名刺希望（Card）", () => {
+  it("is saved and returned with the member", async () => {
+    const cookie = await login();
+    const res = await api(cookie, "POST", "/admin/api/members", member({ id: "bu1", role: "", card: true }));
+    expect(res.status).toBe(201);
+    expect(((await res.json()) as any).member.card).toBe(true);
+    const list = (await (await api(cookie, "GET", "/admin/api/members")).json()) as any;
+    expect(list.members.find((m: any) => m.id === "bu1").card).toBe(true);
+    // 役職のない部員の名刺は希望した人だけ（役職の「メンバー」は役職なし扱い）
+    expect(((await (await api(cookie, "GET", "/admin/api/roles")).json()) as any).plain).toContain("メンバー");
+  });
+});
+
+describe("名簿の取り込み", () => {
+  const csv = (lines: string[]) => new TextEncoder().encode(lines.join("\n"));
+  const parse = (cookie: string, bytes: Uint8Array, query = "") =>
+    req(`/admin/api/import/parse${query}`, { method: "POST", headers: { cookie, "content-type": "application/octet-stream" }, body: bytes });
+
+  it("requires login", async () => {
+    expect((await req("/admin/api/import/parse", { method: "POST", body: csv(["a,b", "1,2"]) })).status).toBe(401);
+    expect((await req("/admin/api/import", { method: "POST", body: "{}" })).status).toBe(401);
+  });
+
+  it("previews a CSV roster: IDs from @andrew.ac.jp, roles matched, existing members flagged — and writes nothing", async () => {
+    notion.add("24e1058", { nameJp: "川本 晴春", role: "部長" });
+    const cookie = await login();
+    const before = notion.pages.length;
+    const res = await parse(cookie, csv([
+      "氏名,ローマ字,役職,メール,名刺希望",
+      "川本 晴春,Haru Kawamoto,部長,24e1058@andrew.ac.jp,",
+      "佐藤 花子,,部員,25e0001@andrew.ac.jp,○",
+      "鈴木 次郎,,会計,26e0002@andrew.ac.jp,",
+      "外部 太郎,,,ext@example.com,",
+    ]));
+    expect(res.status).toBe(200);
+    const j = (await res.json()) as any;
+    expect(j.mapping).toMatchObject({ nameJp: 0, nameEn: 1, role: 2, email: 3, card: 4 });
+    expect(j.rows.map((r: any) => [r.id, r.role, r.card, r.exists])).toEqual([
+      ["24e1058", "部長", false, true],
+      ["25e0001", "", true, false],
+      ["26e0002", "", false, false],
+      ["", "", false, false],
+    ]);
+    expect(j.rows[2].problems.join()).toContain("未登録の役職「会計」");
+    expect(j.rows[3].problems.join()).toContain("ID を決められません");
+    expect(notion.pages.length).toBe(before);
+  });
+
+  it("reads an .xlsx roster and lets the caller override the column mapping", async () => {
+    const cookie = await login();
+    const xlsx = await makeXlsx([["A", "B", "C"], ["山田 太郎", "taro", "部長"]], true);
+    const auto = (await (await parse(cookie, xlsx)).json()) as any;
+    expect(auto.mapping.nameJp).toBe(-1); // 見出しが A/B/C では判定できない（取り込める行もない）
+    expect(auto.rows).toEqual([]);
+    const map = JSON.stringify({ nameJp: 0, id: 1, role: 2 });
+    const j = (await (await parse(cookie, xlsx, `?map=${encodeURIComponent(map)}`)).json()) as any;
+    expect(j.rows[0]).toMatchObject({ id: "taro", nameJp: "山田 太郎", role: "部長", problems: [] });
+  });
+
+  it("rejects unreadable files with a readable message", async () => {
+    const cookie = await login();
+    const res = await parse(cookie, new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 1, 2, 3]));
+    expect(res.status).toBe(422);
+    expect(((await res.json()) as any).error).toContain(".xlsx");
+    expect((await parse(cookie, csv(["氏名,役職"]))).status).toBe(422); // 見出しだけ
+  });
+
+  it("creates new members and updates existing ones without wiping fields the roster leaves blank", async () => {
+    notion.add("24e1058", { nameJp: "川本 晴春", nameEn: "Haru Kawamoto", role: "部長", skills: "Go, Rust", githubId: "haru2514", targetUrl: "https://example.com/me", active: false });
+    const cookie = await login();
+    const res = await api(cookie, "POST", "/admin/api/import", {
+      rows: [
+        { id: "24e1058", nameJp: "川本 晴春", nameEn: "", role: "", email: "24e1058@andrew.ac.jp", githubId: "", xId: "", skills: [], card: false },
+        { id: "25e0001", nameJp: "佐藤 花子", nameEn: "Hanako Sato", role: "", email: "25e0001@andrew.ac.jp", githubId: "", xId: "", skills: ["Python"], card: true },
+        { id: "26e0002", nameJp: "鈴木 次郎", role: "会計", email: "", githubId: "", xId: "", skills: [], card: false },
+        { id: "bad id", nameJp: "x", role: "", skills: [] },
+      ],
+    });
+    expect(res.status).toBe(200);
+    const { results } = (await res.json()) as any;
+    expect(results.map((r: any) => [r.id, r.ok, r.action])).toEqual([
+      ["24e1058", true, "update"],
+      ["25e0001", true, "create"],
+      ["26e0002", false, undefined],
+      ["bad id", false, undefined],
+    ]);
+    expect(results[2].error).toContain("肩書き");
+
+    const list = ((await (await api(cookie, "GET", "/admin/api/members")).json()) as any).members as any[];
+    const kawa = list.find((m) => m.id === "24e1058");
+    expect(kawa).toMatchObject({ nameEn: "Haru Kawamoto", role: "部長", skills: ["Go", "Rust"], githubId: "haru2514", email: "24e1058@andrew.ac.jp", targetUrl: "https://example.com/me", active: false });
+    expect(list.find((m) => m.id === "25e0001")).toMatchObject({ role: "", card: true, active: true, skills: ["Python"], nameEn: "Hanako Sato" });
+    expect(list.find((m) => m.id === "26e0002")).toBeUndefined();
+  });
+
+  it("limits how many rows one request may write", async () => {
+    const cookie = await login();
+    const rows = Array.from({ length: 15 }, (_, i) => ({ id: `u${i}`, nameJp: `名${i}`, role: "", skills: [] }));
+    const { results } = (await (await api(cookie, "POST", "/admin/api/import", { rows })).json()) as any;
+    expect(results).toHaveLength(10);
+    expect((await api(cookie, "POST", "/admin/api/import", { rows: [] })).status).toBe(400);
   });
 });

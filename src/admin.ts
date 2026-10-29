@@ -11,6 +11,7 @@
 import { buildAdminPage, buildLoginPage, buildNoPasswordPage } from "./admin-page";
 import { buildBackCard, buildFrontCard, type CardFields } from "./card-template";
 import { FontError } from "./fonts";
+import { buildRows, detectColumns, FIELD_LABELS, FIELDS, markDuplicates, MAX_FILE_BYTES, MAX_ROWS, readTable, RosterError, type Mapping } from "./roster";
 import { invalidateMember } from "./lookup";
 import {
   archiveMember,
@@ -20,6 +21,7 @@ import {
   ID_PATTERN,
   listMembersFull,
   normalizeHandle,
+  PLAIN_ROLES,
   saveRoles,
   updateMember,
   validRoleText,
@@ -77,6 +79,8 @@ export async function handleAdmin(request: Request, env: Env): Promise<Response 
 
 async function api(request: Request, env: Env, path: string, method: string): Promise<Response> {
   if (path === "/admin/api/preview" && method === "POST") return previewCard(request, env);
+  if (path === "/admin/api/import/parse" && method === "POST") return parseRoster(request, env);
+  if (path === "/admin/api/import" && method === "POST") return importRows(request, env);
 
   if (path === "/admin/api/members") {
     if (method === "GET") return json({ members: (await listMembersFull(env)).map(toEdit) });
@@ -123,7 +127,7 @@ async function api(request: Request, env: Env, path: string, method: string): Pr
   }
 
   if (path === "/admin/api/roles") {
-    if (method === "GET") return json(await rolesWithUsage(env));
+    if (method === "GET") return json({ ...(await rolesWithUsage(env)), plain: PLAIN_ROLES });
     if (method === "PUT") {
       const body = (await readJson(request)) as { roles?: unknown };
       const check = validateRoles(body.roles);
@@ -181,6 +185,104 @@ async function previewCard(request: Request, env: Env): Promise<Response> {
   });
 }
 
+/* ── 名簿（Excel / CSV）の取り込み ─────────────────────── */
+
+/** 名簿ファイルを読んで、取り込み前の確認用に 1 人ずつの内容と「新規か更新か」を返す（まだ何も書き込まない） */
+async function parseRoster(request: Request, env: Env): Promise<Response> {
+  const declared = Number(request.headers.get("Content-Length") ?? 0);
+  if (declared > MAX_FILE_BYTES) return json({ error: "ファイルが大きすぎます（2MB まで）" }, 413);
+  const bytes = new Uint8Array(await request.arrayBuffer());
+
+  let table: string[][];
+  try {
+    table = await readTable(bytes);
+  } catch (err) {
+    if (err instanceof RosterError) return json({ error: err.message }, 422);
+    console.error("roster read failed", { error: String(err) });
+    return json({ error: "名簿を読み込めませんでした。.xlsx か CSV か確認してください。" }, 422);
+  }
+  if (table.length < 2) return json({ error: "データの行がありません（1 行目は見出し、2 行目から人の情報にしてください）" }, 422);
+
+  // 列の対応づけ。画面で選び直したときは map（項目=列番号の JSON）で上書きする
+  const headers = table[0].map((h) => String(h ?? "").trim());
+  const mapping: Mapping = detectColumns(headers);
+  const override = new URL(request.url).searchParams.get("map");
+  if (override) {
+    try {
+      const o = JSON.parse(override) as Record<string, unknown>;
+      for (const f of FIELDS) {
+        const v = o[f];
+        if (typeof v === "number" && Number.isInteger(v) && v >= -1 && v < headers.length) mapping[f] = v;
+      }
+    } catch {
+      return json({ error: "列の指定が不正です" }, 400);
+    }
+  }
+
+  const [{ roles }, members] = await Promise.all([getRoles(env), listMembersFull(env)]);
+  const rows = buildRows(table, mapping, roles);
+  markDuplicates(rows);
+  const byId = new Map(members.map((m) => [m.id, m]));
+  return json({
+    headers,
+    mapping,
+    labels: FIELD_LABELS,
+    fields: FIELDS,
+    roles,
+    plain: PLAIN_ROLES,
+    total: table.length - 1,
+    truncated: table.length - 1 > MAX_ROWS,
+    rows: rows.map((r) => {
+      const cur = byId.get(r.id);
+      return { ...r, exists: !!cur, currentName: cur?.fields.nameJp ?? "" };
+    }),
+  });
+}
+
+/** 確認済みの数人ぶんを Notion に書く。既存の ID は更新（名簿が空欄の項目は今の内容を残す）、なければ新規 */
+async function importRows(request: Request, env: Env): Promise<Response> {
+  const body = (await readJson(request)) as { rows?: unknown };
+  const raws = Array.isArray(body.rows) ? body.rows.slice(0, 10) : [];
+  if (!raws.length) return json({ error: "取り込む行がありません" }, 400);
+  const roles = (await getRoles(env)).roles;
+
+  const results: Array<{ id: string; ok: boolean; action?: "create" | "update"; error?: string }> = [];
+  for (const raw of raws) {
+    const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+    const id = str(r.id);
+    try {
+      const cur = ID_PATTERN.test(id) ? await getMember(id, env) : null;
+      const skills = (Array.isArray(r.skills) ? r.skills : []).map((t) => str(t)).filter(Boolean);
+      const merged = {
+        id,
+        active: cur ? cur.active : true,
+        targetUrl: cur?.targetUrl ?? "",
+        nameJp: str(r.nameJp) || cur?.fields.nameJp || "",
+        nameEn: str(r.nameEn) || cur?.fields.nameEn || "",
+        role: str(r.role) || cur?.fields.roleJp || "",
+        email: str(r.email) || cur?.fields.email || "",
+        githubId: str(r.githubId) || cur?.fields.githubId || "",
+        xId: str(r.xId) || cur?.fields.xId || "",
+        skills: skills.length ? skills : (cur?.fields.skillTags ?? []),
+        card: r.card === true || cur?.wantsCard === true,
+      };
+      const parsed = parseInput(merged, roles, !cur);
+      if ("error" in parsed) {
+        results.push({ id, ok: false, error: parsed.error });
+        continue;
+      }
+      if (cur) await updateMember(cur.pageId, parsed.value, env);
+      else await createMember(parsed.value, env);
+      await invalidateMember(id);
+      results.push({ id, ok: true, action: cur ? "update" : "create" });
+    } catch (err) {
+      console.error("import row failed", { id, error: String(err) });
+      results.push({ id, ok: false, error: "Notion への書き込みに失敗しました" });
+    }
+  }
+  return json({ results });
+}
+
 async function rolesWithUsage(env: Env) {
   const [{ roles, warnings }, members] = await Promise.all([getRoles(env), listMembersFull(env)]);
   const usage: Record<string, number> = {};
@@ -202,6 +304,7 @@ function toEdit(m: Member) {
     githubId: m.fields.githubId,
     xId: m.fields.xId,
     skills: m.fields.skillTags,
+    card: m.wantsCard,
   };
 }
 
@@ -279,6 +382,7 @@ function parseInput(
       githubId,
       xId,
       skills: tags.join(", "),
+      card: b.card === true,
     },
   };
 }

@@ -165,6 +165,37 @@ select.in{appearance:none;background-image:linear-gradient(45deg,transparent 50%
 .note.info{background:var(--panel);border-color:var(--line);color:var(--mut)}
 .rview .actions{left:0}
 
+/* import */
+.iview{max-width:1080px;margin:0 auto;padding:30px 32px 140px}
+.iview h2{margin:0 0 6px;font-size:26px;font-weight:800}
+.iview .lead{color:var(--mut);font-size:14.5px;margin:0 0 22px;line-height:1.8}
+.iview .pick{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:22px}
+.iview .pick input[type=file]{display:none}
+.iview .fname{color:var(--mut);font-size:14px}
+.iview details{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:12px 16px;margin:0 0 18px}
+.iview summary{cursor:pointer;font-weight:700;font-size:14.5px}
+.mapgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px 16px;margin-top:14px}
+.mapgrid label{display:block;font-size:12.5px;color:var(--dim);font-weight:600;margin-bottom:4px}
+.mapgrid select.in{min-height:40px;padding:7px 12px;font-size:14px}
+.sumbar{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 14px}
+.sumbar .pill{border:1px solid var(--line2);border-radius:99px;padding:3px 13px;font-size:13.5px;color:var(--mut);font-weight:600}
+.sumbar .pill b{color:var(--tx);margin-right:3px}
+.sumbar .pill.warn{border-color:#5a4813;color:var(--warn)}
+.tbl{width:100%;border-collapse:separate;border-spacing:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;font-size:14px}
+.tbl th{background:var(--panel2);color:var(--dim);font-size:12.5px;text-align:left;padding:9px 10px;font-weight:600;white-space:nowrap}
+.tbl td{padding:9px 10px;border-top:1px solid var(--line);vertical-align:top;background:var(--panel)}
+.tbl tr.skip td{opacity:.5}
+.tbl .in{min-height:38px;padding:6px 10px;font-size:14px}
+.tbl td.idc{min-width:150px}
+.tbl td.rc{min-width:150px}
+.tbl .st{font-size:13px;line-height:1.6}
+.tbl .st .bad{color:var(--err)}
+.tbl .st .tag{margin-right:4px}
+.tbl .cap{font-size:12px;color:var(--dim)}
+.iview .actions{left:0}
+.res{border:1px solid var(--line);background:var(--panel);border-radius:12px;padding:16px 20px;margin:0 0 22px;line-height:1.9}
+.res .bad{color:var(--err)}
+
 /* misc */
 dialog{background:var(--panel);color:var(--tx);border:1px solid var(--line2);border-radius:18px;padding:26px;max-width:460px;width:calc(100% - 32px);box-shadow:0 30px 80px rgba(0,0,0,.65)}
 dialog::backdrop{background:rgba(0,0,0,.65)}
@@ -263,7 +294,7 @@ const JS = String.raw`
   'use strict';
   var BASE = (document.body.getAttribute('data-base') || location.origin).replace(/\/+$/, '');
   var S = { members: [], roles: [], usage: {}, warnings: [], tab: 'members', sel: null, draft: null, orig: null,
-            mode: 'profile', q: '', filter: 'all', rdraft: null, rorig: null, busy: false, side: 'front', pvOpen: false, touched: {} };
+            mode: 'profile', q: '', filter: 'all', rdraft: null, rorig: null, plain: [], imp: null, busy: false, side: 'front', pvOpen: false, touched: {} };
 
   var ID_RE = /^[A-Za-z0-9._-]{1,64}$/, HANDLE_RE = /^[A-Za-z0-9_.-]{1,50}$/, EMAIL_RE = /^[^\s@<>"']+@[^\s@<>"']+\.[^\s@<>"']+$/;
 
@@ -303,12 +334,14 @@ const JS = String.raw`
   }
 
   /* ── 状態 ── */
-  function blank() { return { id: '', active: true, targetUrl: '', nameJp: '', nameEn: '', role: '', roleEn: '', email: '', githubId: '', xId: '', skills: [] }; }
+  function blank() { return { id: '', active: true, card: false, targetUrl: '', nameJp: '', nameEn: '', role: '', roleEn: '', email: '', githubId: '', xId: '', skills: [] }; }
   function strip(d) { var c = clone(d); delete c.roleEn; return JSON.stringify(c); }
   function memberDirty() { return !!(S.draft && S.orig && (strip(S.draft) !== strip(S.orig) || (S.mode === 'profile') !== !S.orig.targetUrl)); }
   function pick(r) { return { jp: r.jp, en: r.en }; }
   function rolesDirty() { return !!(S.rdraft && JSON.stringify(S.rdraft.map(pick)) !== JSON.stringify(S.rorig.map(pick))); }
-  function dirty() { return S.tab === 'members' ? memberDirty() : rolesDirty(); }
+  function dirty() { return S.tab === 'members' ? memberDirty() : S.tab === 'roles' ? rolesDirty() : false; }
+  function officer(role) { return !!role && S.plain.indexOf(String(role).trim()) < 0; }
+  function cardOf(m) { return officer(m.role) || !!m.card; }
   function guard() { return dirty() ? ask('保存していない変更があります。破棄して移動しますか？', '破棄して移動', true) : Promise.resolve(true); }
   function enOf(jp) { for (var i = 0; i < S.roles.length; i++) if (S.roles[i].jp === jp) return S.roles[i].en; return ''; }
   function normHandle(raw, hosts) {
@@ -320,7 +353,7 @@ const JS = String.raw`
   /* ── 読み込み ── */
   function load() {
     return Promise.all([api('GET', '/admin/api/members'), api('GET', '/admin/api/roles')]).then(function (r) {
-      S.members = r[0].members; S.roles = r[1].roles; S.usage = r[1].usage; S.warnings = r[1].warnings || [];
+      S.members = r[0].members; S.roles = r[1].roles; S.plain = r[1].plain || []; S.usage = r[1].usage; S.warnings = r[1].warnings || [];
       S.rdraft = S.roles.map(function (x) { return { jp: x.jp, en: x.en, orig: true }; }); S.rorig = clone(S.rdraft);
       render();
     }).catch(function (e) { $('#app').innerHTML = '<div class="loading">読み込みに失敗しました: ' + esc(e.message) + '</div>'; });
@@ -329,7 +362,7 @@ const JS = String.raw`
   /* ── 描画 ── */
   function render() {
     [].forEach.call(document.querySelectorAll('.tabs button'), function (b) { b.classList.toggle('on', b.getAttribute('data-tab') === S.tab); });
-    if (S.tab === 'members') renderMembers(); else renderRoles();
+    if (S.tab === 'members') renderMembers(); else if (S.tab === 'roles') renderRoles(); else renderImport();
   }
   function initial(m) { return esc((m.nameJp || m.id || '?').charAt(0)); }
 
@@ -352,9 +385,9 @@ const JS = String.raw`
 
   function drawFilters() {
     var fl = $('#filters'); if (!fl) return; fl.innerHTML = '';
-    var counts = { all: S.members.length, on: 0, off: 0, fwd: 0 };
-    S.members.forEach(function (m) { if (m.active) counts.on++; else counts.off++; if (m.targetUrl) counts.fwd++; });
-    [['all', 'すべて'], ['on', '公開'], ['off', '停止'], ['fwd', '転送あり']].forEach(function (f) {
+    var counts = { all: S.members.length, on: 0, off: 0, fwd: 0, card: 0 };
+    S.members.forEach(function (m) { if (m.active) counts.on++; else counts.off++; if (m.targetUrl) counts.fwd++; if (cardOf(m)) counts.card++; });
+    [['all', 'すべて'], ['card', '名刺あり'], ['on', '公開'], ['off', '停止'], ['fwd', '転送あり']].forEach(function (f) {
       var b = mk('button', 'fchip' + (S.filter === f[0] ? ' on' : ''), f[1] + '<small>' + counts[f[0]] + '</small>'); b.type = 'button';
       b.onclick = function () { S.filter = f[0]; drawItems(); }; fl.appendChild(b);
     });
@@ -367,6 +400,7 @@ const JS = String.raw`
       if (S.filter === 'on' && !m.active) return false;
       if (S.filter === 'off' && m.active) return false;
       if (S.filter === 'fwd' && !m.targetUrl) return false;
+      if (S.filter === 'card' && !cardOf(m)) return false;
       return !q || (m.id + ' ' + m.nameJp + ' ' + m.nameEn + ' ' + m.role).toLowerCase().indexOf(q) >= 0;
     });
     if (!rows.length) { ul.appendChild(mk('li', 'empty', S.members.length ? '条件に合うメンバーがいません' : 'まだメンバーがいません。<br>「＋ 追加」から登録できます。')); return; }
@@ -376,7 +410,7 @@ const JS = String.raw`
       li.innerHTML = '<div class="av">' + initial(m) + '</div><div class="txt"><div class="nm">' + esc(m.nameJp || '（名前未設定）') +
         '</div><div class="sub">' + (m.role ? esc(m.role) + ' · ' : '') + '<code>' + esc(m.id) + '</code></div></div><div class="meta">' +
         (on && memberDirty() ? '<span class="dot" title="未保存の変更"></span>' : '') +
-        '<span class="tag ' + (m.active ? 'on' : 'off') + '">' + (m.active ? '公開' : '停止') + '</span>' + (m.targetUrl ? '<span class="tag fwd">転送</span>' : '') + '</div>';
+        '<span class="tag ' + (m.active ? 'on' : 'off') + '">' + (m.active ? '公開' : '停止') + '</span>' + (m.targetUrl ? '<span class="tag fwd">転送</span>' : '') + (cardOf(m) ? '<span class="tag on">名刺</span>' : '') + '</div>';
       li.onclick = function () { select(m.id); };
       ul.appendChild(li);
     });
@@ -412,6 +446,7 @@ const JS = String.raw`
   function prefixed(prefix, input) { var w = mk('div', 'pre'); w.appendChild(mk('span', '', esc(prefix))); w.appendChild(input); return w; }
 
   /* ── フォーム ── */
+  var cardSync = null;
   function drawForm() {
     var fw = $('#fw'); if (!fw) return; fw.innerHTML = '';
     if (!S.sel) { fw.appendChild(mk('div', 'empty', '左の一覧からメンバーを選ぶか、<br>「＋ 追加」で新しく登録します。')); return; }
@@ -444,7 +479,7 @@ const JS = String.raw`
     if (d.role && !enOf(d.role)) sel.appendChild(new Option(d.role + '（未登録）', d.role));
     sel.value = d.role;
     var en = mk('span', 'en'); function setEn() { en.textContent = '名刺の英語表記: ' + (enOf(d.role) || '—'); en.style.display = d.role ? '' : 'none'; } setEn();
-    sel.onchange = function () { d.role = sel.value; d.roleEn = enOf(d.role); setEn(); touch('role'); };
+    sel.onchange = function () { d.role = sel.value; d.roleEn = enOf(d.role); setEn(); if (cardSync) cardSync(); touch('role'); };
     var rf = field('肩書き', sel, '', 'role'); rf.insertBefore(en, rf.querySelector('.errmsg'));
     rf.insertBefore(mk('div', 'hint', '選択肢を増やす・英訳を直すには上の「肩書き」タブへ。'), rf.querySelector('.errmsg'));
     s2.appendChild(rf); col.appendChild(s2);
@@ -488,6 +523,16 @@ const JS = String.raw`
     cb.onchange = function () { d.active = cb.checked; touch('active'); };
     sw.appendChild(cb); sw.appendChild(mk('span', 'knob')); sw.appendChild(mk('span', '', '<b>公開する</b><small>OFF にすると QR・プロフィールが 404 になります</small>'));
     var fa = mk('div', 'fld'); fa.appendChild(sw); s1.appendChild(fa);
+    var sw2 = mk('label', 'sw'); var cb2 = mk('input'); cb2.type = 'checkbox';
+    var cardTxt = mk('span', '');
+    sw2.appendChild(cb2); sw2.appendChild(mk('span', 'knob')); sw2.appendChild(cardTxt);
+    function setCard() {
+      var auto = officer(d.role); cb2.checked = auto || !!d.card; cb2.disabled = auto;
+      cardTxt.innerHTML = '<b>名刺を作る</b><small>' + (auto ? '役職があるので自動で作られます' : '役職のない部員は、希望する人だけ ON にします') + '</small>';
+    }
+    cb2.onchange = function () { d.card = cb2.checked; touch('card'); };
+    setCard(); cardSync = setCard;
+    var fb = mk('div', 'fld'); fb.appendChild(sw2); s1.appendChild(fb);
     if (isNew) col.insertBefore(s1, col.firstChild); else col.appendChild(s1); // 新規は ID を最初に入力する
 
     grid.appendChild(col); grid.appendChild(previewPanel());
@@ -744,10 +789,174 @@ const JS = String.raw`
       .catch(function (e) { toast(e.message, 'err'); }).then(function () { S.busy = false; if ($('#rsave')) refreshRoles(); });
   }
 
+
+  /* ── 名簿の取り込み ── */
+  var ROWS_PER_REQ = 8;
+  function renderImport() {
+    var app = $('#app'); app.innerHTML = '';
+    var v = mk('div', 'iview');
+    v.appendChild(mk('h2', '', '名簿の取り込み'));
+    v.appendChild(mk('p', 'lead', 'Excel（.xlsx）か CSV の名簿を選ぶと、メンバーをまとめて登録・更新できます。1 行目は見出し、2 行目から 1 人ずつにしてください。' +
+      '<br><b>役職がある人は名刺を自動で作ります</b>。役職のない部員は、名簿に「名刺希望」の列（○など）があればその人だけ、なければあとから「メンバー」タブで選べます。' +
+      '<br>ID（QR の URL）は、名簿に ID 列があればそれを、なければメールアドレス（@andrew.ac.jp）の @ より前を使います。'));
+    var pick = mk('div', 'pick');
+    var fi = mk('input'); fi.type = 'file'; fi.id = 'ifile'; fi.accept = '.xlsx,.csv,.tsv,.txt,text/csv';
+    var fb = mk('button', 'btn primary', 'ファイルを選ぶ'); fb.type = 'button'; fb.onclick = function () { fi.click(); };
+    var fn = mk('span', 'fname', S.imp ? esc(S.imp.name) : '.xlsx / .csv（2MB まで・先頭のシートだけ読みます）');
+    pick.appendChild(fb); pick.appendChild(fi); pick.appendChild(fn); v.appendChild(pick);
+    fi.onchange = function () { var f = fi.files && fi.files[0]; if (f) loadRoster(f); };
+    var body = mk('div'); body.id = 'ibody'; v.appendChild(body);
+    app.appendChild(v);
+    if (S.imp && S.imp.parsed) drawImport();
+  }
+
+  function loadRoster(file) {
+    if (file.size > 2 * 1024 * 1024) { toast('ファイルが大きすぎます（2MB まで）', 'err'); return; }
+    file.arrayBuffer().then(function (buf) { S.imp = { name: file.name, buf: buf, parsed: null, rows: [], map: null, result: null }; return parseRoster(null); })
+      .catch(function (e) { S.imp = null; renderImport(); toast(e.message, 'err'); });
+  }
+  function parseRoster(map) {
+    var url = '/admin/api/import/parse' + (map ? '?map=' + encodeURIComponent(JSON.stringify(map)) : '');
+    return fetch(url, { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: S.imp.buf }).then(function (r) {
+      if (r.status === 401) { location.reload(); throw new Error('unauthorized'); }
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) throw new Error(j.error || ('エラー (' + r.status + ')'));
+        S.imp.parsed = j; S.imp.map = j.mapping;
+        S.imp.rows = j.rows.map(function (r) {
+          r.roleOk = !(r.roleRaw && S.plain.indexOf(r.roleRaw) < 0 && !r.role);
+          r.include = true; r.card = !!r.card; return r;
+        });
+        S.imp.rows.forEach(function (r) { r.include = rowProblems(r).length === 0; });
+        renderImport();
+      });
+    });
+  }
+
+  function rowProblems(r) {
+    var p = [], id = r.id.trim();
+    if (!id) p.push('ID を入力してください');
+    else if (!ID_RE.test(id)) p.push('ID は半角英数字と . _ - の 64 文字までです');
+    else if (S.imp.rows.some(function (o) { return o !== r && o.id.trim() === id; })) p.push('名簿の中で ID が重なっています');
+    if (!r.roleOk) p.push('名簿の役職「' + r.roleRaw + '」は未登録です。選んでください');
+    if (r.email && !EMAIL_RE.test(r.email)) p.push('メールの形式が正しくありません');
+    return p;
+  }
+  function isExisting(r) { var id = r.id.trim(); return S.members.some(function (m) { return m.id === id; }); }
+
+  function drawImport() {
+    var b = $('#ibody'); if (!b) return; b.innerHTML = '';
+    var P = S.imp.parsed, rows = S.imp.rows;
+
+    if (S.imp.result) {
+      var res = S.imp.result, bad = res.filter(function (x) { return !x.ok; });
+      var box = mk('div', 'res');
+      box.innerHTML = '<b>取り込みました</b>：新規 ' + res.filter(function (x) { return x.ok && x.action === 'create'; }).length + ' 人 / 更新 ' + res.filter(function (x) { return x.ok && x.action === 'update'; }).length + ' 人' +
+        (bad.length ? '<br><span class="bad">失敗 ' + bad.length + ' 人：' + bad.map(function (x) { return esc(x.id) + '（' + esc(x.error) + '）'; }).join('、') + '</span>' : '') +
+        '<br><a href="/preview" target="_blank" rel="noopener">名刺プレビューを開く ↗</a>';
+      b.appendChild(box);
+    }
+
+    /* 列の対応 */
+    var m = S.imp.map, need = m.nameJp < 0 && m.surname < 0 || (m.id < 0 && m.email < 0);
+    var det = mk('details'); if (need) det.open = true;
+    det.appendChild(mk('summary', '', '列の対応' + (need ? '（氏名か ID が見つかりません。選んでください）' : '（自動で判定しました。違っていれば変更できます）')));
+    var g = mk('div', 'mapgrid');
+    P.fields.forEach(function (f) {
+      var w = mk('div'); w.appendChild(mk('label', '', esc(P.labels[f])));
+      var sel = mk('select', 'in'); sel.appendChild(new Option('（使わない）', '-1'));
+      P.headers.forEach(function (h, i) { sel.appendChild(new Option((h || '（見出しなし）') + '  ［' + (i + 1) + ' 列目］', String(i))); });
+      sel.value = String(m[f]);
+      sel.onchange = function () { var nm = clone(S.imp.map); nm[f] = Number(sel.value); parseRoster(nm).catch(function (e) { toast(e.message, 'err'); }); };
+      w.appendChild(sel); g.appendChild(w);
+    });
+    det.appendChild(g); b.appendChild(det);
+
+    if (P.truncated) b.appendChild(mk('div', 'note', '行が多いため、先頭の 500 人だけ表示しています。残りは名簿を分けて取り込んでください。'));
+
+    var sum = mk('div', 'sumbar'); sum.id = 'isum'; b.appendChild(sum);
+
+    var tbl = mk('table', 'tbl');
+    tbl.innerHTML = '<thead><tr><th></th><th>行</th><th>ID</th><th>氏名</th><th>役職</th><th>名刺</th><th>状態</th></tr></thead>';
+    var tb = mk('tbody');
+    rows.forEach(function (r) {
+      var tr = mk('tr');
+      var c0 = mk('td'), cb = mk('input'); cb.type = 'checkbox'; cb.checked = r.include; cb.setAttribute('aria-label', '取り込む');
+      cb.onchange = function () { r.include = cb.checked; paintAll(); }; c0.appendChild(cb); tr.appendChild(c0);
+      tr.appendChild(mk('td', '', String(r.line)));
+      var cId = mk('td', 'idc'), idIn = mk('input', 'in'); idIn.value = r.id; idIn.setAttribute('spellcheck', 'false');
+      idIn.oninput = function () { r.id = idIn.value.trim().toLowerCase(); paintAll(); };
+      cId.appendChild(idIn); tr.appendChild(cId);
+      tr.appendChild(mk('td', '', '<b>' + esc(r.nameJp || '（氏名なし）') + '</b>' + (r.nameEn ? '<div class="cap">' + esc(r.nameEn) + '</div>' : '') + (r.email ? '<div class="cap">' + esc(r.email) + '</div>' : '')));
+      var cR = mk('td', 'rc'), rs = mk('select', 'in'); rs.appendChild(new Option('（役職なし＝部員）', ''));
+      P.roles.forEach(function (x) { rs.appendChild(new Option(x.jp, x.jp)); });
+      if (!r.roleOk) rs.insertBefore(new Option('「' + r.roleRaw + '」→ 選んでください', '__ask'), rs.firstChild);
+      rs.value = r.roleOk ? r.role : '__ask';
+      rs.onchange = function () { if (rs.value === '__ask') return; r.role = rs.value; r.roleOk = true; paintAll(); };
+      cR.appendChild(rs); tr.appendChild(cR);
+      var cC = mk('td'), cc = mk('input'); cc.type = 'checkbox'; cc.setAttribute('aria-label', '名刺を作る');
+      cc.onchange = function () { r.card = cc.checked; paintAll(); }; cC.appendChild(cc); tr.appendChild(cC);
+      var cS = mk('td', 'st'); tr.appendChild(cS);
+      r._el = { tr: tr, cb: cb, cc: cc, cS: cS }; tb.appendChild(tr);
+    });
+    tbl.appendChild(tb); b.appendChild(tbl);
+
+    var act = mk('div', 'actions'); var inner = mk('div', 'inner');
+    var go = mk('button', 'btn primary', '取り込む'); go.type = 'button'; go.id = 'igo'; go.style.minWidth = '160px'; go.onclick = commitImport;
+    inner.appendChild(go); inner.appendChild(mk('span', 'sp')); act.appendChild(inner); b.appendChild(act);
+    paintAll();
+  }
+
+  function paintAll() {
+    var rows = S.imp.rows, n = { create: 0, update: 0, card: 0, bad: 0, inc: 0 };
+    rows.forEach(function (r) {
+      var el = r._el; if (!el) return;
+      var probs = rowProblems(r), exists = isExisting(r), auto = officer(r.role);
+      if (probs.length) r.include = false;
+      el.cb.checked = r.include; el.cb.disabled = probs.length > 0;
+      el.cc.checked = auto || r.card; el.cc.disabled = auto || !r.include;
+      el.tr.className = r.include ? '' : 'skip';
+      el.cS.innerHTML = probs.length ? '<span class="bad">' + probs.map(esc).join('<br>') + '</span>'
+        : '<span class="tag ' + (exists ? 'fwd' : 'on') + '">' + (exists ? '更新' : '新規') + '</span>' + (auto ? '<span class="cap">役職あり→名刺を作る</span>' : (r.card ? '<span class="cap">名刺希望</span>' : '<span class="cap">名刺なし</span>')) +
+          (exists && r.include ? '<div class="cap">既存の「' + esc((S.members.filter(function (m) { return m.id === r.id.trim(); })[0] || {}).nameJp || '') + '」に上書き（名簿が空欄の項目は今のまま）</div>' : '');
+      if (probs.length) n.bad++;
+      if (r.include) { n.inc++; if (exists) n.update++; else n.create++; if (auto || r.card) n.card++; }
+    });
+    var sum = $('#isum'); if (sum) sum.innerHTML = '<span class="pill"><b>' + rows.length + '</b>人を読み込み</span><span class="pill"><b>' + n.create + '</b>人 新規</span><span class="pill"><b>' + n.update + '</b>人 更新</span><span class="pill"><b>' + n.card + '</b>人 名刺を作る</span>' + (n.bad ? '<span class="pill warn"><b>' + n.bad + '</b>人 要確認（取り込まれません）</span>' : '');
+    var go = $('#igo'); if (go) { go.disabled = S.busy || n.inc === 0; go.textContent = S.busy ? '取り込み中…' : (n.inc ? n.inc + ' 人を取り込む' : '取り込む人がいません'); }
+  }
+
+  function commitImport() {
+    if (S.busy) return;
+    var rows = S.imp.rows.filter(function (r) { return r.include && rowProblems(r).length === 0; });
+    if (!rows.length) return;
+    var nu = rows.filter(isExisting).length;
+    ask(rows.length + ' 人を Notion に取り込みます（新規 ' + (rows.length - nu) + ' 人・更新 ' + nu + ' 人）。更新は、名簿に書かれている項目だけを上書きします。', '取り込む').then(function (ok) {
+      if (!ok) return;
+      S.busy = true; paintAll();
+      var results = [], i = 0;
+      function next() {
+        if (i >= rows.length) return Promise.resolve();
+        var chunk = rows.slice(i, i + ROWS_PER_REQ); i += ROWS_PER_REQ;
+        var payload = chunk.map(function (r) { return { id: r.id.trim(), nameJp: r.nameJp, nameEn: r.nameEn, role: r.role, email: r.email, githubId: r.githubId, xId: r.xId, skills: r.skills, card: officer(r.role) || !!r.card }; });
+        return api('POST', '/admin/api/import', { rows: payload }).then(function (j) { results = results.concat(j.results); var go = $('#igo'); if (go) go.textContent = '取り込み中… ' + results.length + ' / ' + rows.length; }).then(next);
+      }
+      next().catch(function (e) { toast(e.message, 'err'); }).then(function () {
+        return api('GET', '/admin/api/members').then(function (m) { S.members = m.members; refreshUsage(); }).catch(function () {});
+      }).then(function () {
+        S.busy = false;
+        var okIds = {}; results.forEach(function (x) { if (x.ok) okIds[x.id] = 1; });
+        S.imp.rows = S.imp.rows.filter(function (r) { return !okIds[r.id.trim()]; });
+        S.imp.result = results;
+        toast(results.filter(function (x) { return x.ok; }).length + ' 人を取り込みました', 'ok');
+        renderImport();
+      });
+    });
+  }
+
   /* ── 起動 ── */
   [].forEach.call(document.querySelectorAll('.tabs button'), function (b) {
     b.onclick = function () { var t = b.getAttribute('data-tab'); if (t === S.tab) return; guard().then(function (ok) { if (!ok) return;
-      if (S.tab === 'members') { S.draft = S.orig = null; S.sel = null; } else { S.rdraft = clone(S.rorig); }
+      if (S.tab === 'members') { S.draft = S.orig = null; S.sel = null; } else if (S.tab === 'roles') { S.rdraft = clone(S.rorig); }
       S.tab = t; lastDirty = null; render(); }); };
   });
   $('#logout').onclick = function () { api('POST', '/admin/logout').then(function () { location.reload(); }); };
@@ -766,7 +975,7 @@ export function buildAdminPage(base: string): string {
     "管理画面 — TECH CLUB",
     `<header class="bar">
   <h1>管理</h1>
-  <nav class="tabs"><button type="button" data-tab="members" class="on">メンバー</button><button type="button" data-tab="roles">肩書き</button></nav>
+  <nav class="tabs"><button type="button" data-tab="members" class="on">メンバー</button><button type="button" data-tab="roles">肩書き</button><button type="button" data-tab="import">名簿取り込み</button></nav>
   <span class="sp"></span>
   <a class="jump" href="/preview" target="_blank" rel="noopener">名刺プレビュー ↗</a>
   <button class="linkbtn" id="logout" type="button">ログアウト</button>

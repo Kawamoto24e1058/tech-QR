@@ -67,6 +67,8 @@ const INDEX_CSS = `${BASE_CSS}
   .badge.on { background: #052e1a; color: #4ade80; }
   .badge.off { background: #2a2a2e; color: #8a8f98; }
   .empty { color: #8a8f98; padding: 40px 0; text-align: center; }
+  h2.sub { font-size: 14px; margin: 36px 0 12px; color: #a1a1aa; font-weight: 600; }
+  h2.sub small { font-weight: 400; color: #71717a; margin-left: 8px; font-size: 12px; }
 `;
 
 /** GET /preview/:id。cards は描画済み SVG（フォント取得に失敗した面は null） */
@@ -120,22 +122,25 @@ export function buildCardPreview(
 </html>`;
 }
 
-/** GET /preview */
+/** GET /preview。名刺を作る人（役職がある人 + 名刺希望の人）を上に、それ以外を「名刺なし」として下にまとめる */
 export function buildIndexPage(members: MemberSummary[]): string {
-  const items = members
-    .map(
-      (m) => `<li><a href="/preview/${esc(m.id)}">
+  const item = (m: MemberSummary) => `<li><a href="/preview/${esc(m.id)}">
     <span class="name">${esc(m.name || "（名前未設定）")}</span>
     <span class="idtag">${esc(m.id)}</span>
     <span class="spacer"></span>
     <span class="badge ${m.active ? "on" : "off"}">${m.active ? "Active" : "停止中"}</span>
-  </a></li>`,
-    )
-    .join("\n  ");
+  </a></li>`;
+  const list = (ms: MemberSummary[]) => `<ul>\n  ${ms.map(item).join("\n  ")}\n</ul>`;
+
+  const withCard = members.filter((m) => m.card);
+  const without = members.filter((m) => !m.card);
 
   const body = members.length
-    ? `<ul>\n  ${items}\n</ul>`
-    : `<p class="empty">メンバーがまだ登録されていません。Notion の Database に行を追加してください。</p>`;
+    ? (withCard.length ? list(withCard) : `<p class="empty">名刺を作る人がまだいません。役職を設定するか、管理画面で「名刺を作る」にチェックを入れてください。</p>`) +
+      (without.length
+        ? `<h2 class="sub">名刺なし（${without.length} 名）<small>役職がなく、名刺を希望していない人</small></h2>\n${list(without)}`
+        : "")
+    : `<p class="empty">メンバーがまだ登録されていません。管理画面から追加するか、名簿（Excel）を取り込んでください。</p>`;
 
   return `<!doctype html>
 <html lang="ja">
@@ -148,7 +153,7 @@ export function buildIndexPage(members: MemberSummary[]): string {
 <body>
 <div class="wrap">
   <h1>名刺プレビュー</h1>
-  <p class="muted">名前をクリックすると表裏の名刺を確認・ダウンロードできます（${members.length} 名）。 <a href="/admin">メンバーの編集は管理画面 →</a></p>
+  <p class="muted">名前をクリックすると表裏の名刺を確認・ダウンロードできます（名刺を作る人 ${withCard.length} 名）。 <a href="/admin">メンバーの編集・名簿の取り込みは管理画面 →</a></p>
   ${body}
 </div>
 </body>

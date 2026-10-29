@@ -3,7 +3,7 @@
  *
  * 1 行 = 1 メンバー。`ID`(Title) をキーに引く。公式 SDK は使わず fetch 直叩き。
  *   ID / Active / TargetURL / Name_JP / Name_EN / Role / Role_EN /
- *   Email / Github_ID / X_ID / SkillTags
+ *   Email / Github_ID / X_ID / SkillTags / Card（名刺希望。役職のない部員用。なければ自動で作る）
  *
  * 読み取りは公開ページ・名刺用、書き込み（create/update/archive・肩書き管理）は /admin 用。
  * Notion 側で直接編集しても同じデータを見るので、両方の入口が併存できる。
@@ -32,6 +32,8 @@ export interface Member {
   active: boolean;
   /** 空ならプロフィールページ、入っていればその URL へ転送 */
   targetUrl: string;
+  /** 名刺希望（Card チェック。役職がある人は関係なく名刺の対象） */
+  wantsCard: boolean;
   fields: CardFields;
 }
 
@@ -39,6 +41,21 @@ export interface MemberSummary {
   id: string;
   name: string;
   active: boolean;
+  /** 名刺を作る対象か（役職がある人 or 名刺希望） */
+  card: boolean;
+}
+
+/** 役職を持たない部員を表す言葉（役職欄にこう書かれていたら「役職なし」。名刺は希望した人だけ） */
+export const PLAIN_ROLES = ["部員", "メンバー", "一般", "一般部員", "なし", "無し", "無", "-", "ー", "—"];
+
+/** 役職がある（＝名刺を自動で作る）人か */
+export function isOfficer(role: string): boolean {
+  return !!role && !PLAIN_ROLES.includes(role.normalize("NFKC").trim());
+}
+
+/** 名刺を作る対象か。役職がある人は自動、それ以外は「名刺希望」の人だけ */
+export function wantsCardOf(m: Pick<Member, "wantsCard" | "fields">): boolean {
+  return isOfficer(m.fields.roleJp) || m.wantsCard;
 }
 
 /** 管理画面のフォームが送る（＝Notion に書く）内容 */
@@ -54,6 +71,8 @@ export interface MemberInput {
   xId: string;
   /** "A, B, C" 形式 */
   skills: string;
+  /** 名刺希望（役職のない部員用） */
+  card: boolean;
 }
 
 export interface Role {
@@ -98,6 +117,7 @@ export async function listMembers(env: NotionEnv): Promise<MemberSummary[]> {
     id: m.id,
     name: m.fields.nameJp,
     active: m.active,
+    card: wantsCardOf(m),
   }));
 }
 
@@ -135,12 +155,29 @@ function toProperties(i: MemberInput, withId: boolean): Record<string, unknown> 
     Github_ID: rich(i.githubId),
     X_ID: rich(i.xId),
     SkillTags: rich(i.skills),
+    Card: { checkbox: i.card },
   };
   if (withId) props.ID = { title: [{ text: { content: i.id } }] };
   return props;
 }
 
+/**
+ * Card（名刺希望）列が Database になければ作る。この仕組みを入れる前から使っている Database でも、
+ * 管理画面で最初に保存・取り込みするときに自動で追加される（isolate ごとに 1 回だけ確認）
+ */
+const cardReady = new Set<string>();
+async function ensureCardProperty(env: NotionEnv): Promise<void> {
+  const key = `${env.NOTION_API_BASE ?? ""}/${env.NOTION_DATABASE_ID}`;
+  if (cardReady.has(key)) return;
+  const db = await call(env, "GET", `/databases/${env.NOTION_DATABASE_ID}`);
+  if (!db.properties?.Card) {
+    await call(env, "PATCH", `/databases/${env.NOTION_DATABASE_ID}`, { properties: { Card: { checkbox: {} } } });
+  }
+  cardReady.add(key);
+}
+
 export async function createMember(i: MemberInput, env: NotionEnv): Promise<Member> {
+  await ensureCardProperty(env);
   const page = await call(env, "POST", "/pages", {
     parent: { database_id: env.NOTION_DATABASE_ID },
     properties: toProperties(i, true),
@@ -150,6 +187,7 @@ export async function createMember(i: MemberInput, env: NotionEnv): Promise<Memb
 
 /** ID（= QR の URL の鍵）は renameId を true にしたときだけ書き換える */
 export async function updateMember(pageId: string, i: MemberInput, env: NotionEnv, renameId = false): Promise<Member> {
+  await ensureCardProperty(env);
   const page = await call(env, "PATCH", `/pages/${pageId}`, { properties: toProperties(i, renameId) });
   return toMember(page);
 }
@@ -222,6 +260,7 @@ function toMember(page: NotionPage): Member {
     id: text(page, "ID"),
     active: checkbox(page, "Active"),
     targetUrl: url(page, "TargetURL"),
+    wantsCard: checkbox(page, "Card"),
     fields: {
       id: text(page, "ID"),
       nameJp: text(page, "Name_JP"),
