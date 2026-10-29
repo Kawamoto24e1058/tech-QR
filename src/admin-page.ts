@@ -1000,7 +1000,7 @@ const JS = String.raw`
     var v = mk('div', 'iview');
     v.appendChild(mk('h2', '', '名簿の取り込み'));
     v.appendChild(mk('p', 'lead', 'Excel（.xlsx）・CSV・表の PDF の名簿を選ぶと、メンバーをまとめて登録・更新できます。1 行目は見出し、2 行目から 1 人ずつにしてください。' +
-      '<br><b>役職がある人は名刺を自動で作ります</b>。役職のない部員は、名簿に「名刺希望」の列（○など）があればその人だけ、なければあとから「メンバー」タブで選べます。' +
+      '<br><b>取り込むのは、役職がある人（幹部）だけ</b>がチェック済みの状態で出ます（名刺も幹部だけ自動で作られます）。役職のない部員は一覧に出ますが、チェックは外してあります。希望する人はチェックを入れると取り込めます（名簿に「名刺希望」の列（○など）があれば、その人は最初からチェック済み）。' +
       '<br>ID（QR の URL）は、名簿に ID 列があればそれを、なければメールアドレス（@andrew.ac.jp）の @ より前を使います。'));
     var pick = mk('div', 'pick');
     var fi = mk('input'); fi.type = 'file'; fi.id = 'ifile'; fi.accept = '.xlsx,.csv,.tsv,.txt,.pdf,text/csv,application/pdf';
@@ -1100,7 +1100,7 @@ const JS = String.raw`
           r.roleOk = !(r.roleRaw && S.plain.indexOf(r.roleRaw) < 0 && !r.role);
           r.include = true; r.card = !!r.card; return r;
         });
-        S.imp.rows.forEach(function (r) { r.include = rowProblems(r).length === 0; });
+        S.imp.rows.forEach(function (r) { r.include = rowProblems(r).length === 0 && (officer(r.role) || r.card); }); // 取り込むのは役職がある人（幹部）と名刺希望の人だけ。ほかの部員は一覧に出すがチェックは外す
         renderImport();
       });
     });
@@ -1150,7 +1150,7 @@ const JS = String.raw`
     });
     det.appendChild(hw); det.appendChild(g); b.appendChild(det);
 
-    if (P.unknownRoles && P.unknownRoles.length) b.appendChild(unknownRolesBox(P.unknownRoles));
+    var rb = rolesBox(P); if (rb) b.appendChild(rb);
     if (P.truncated) b.appendChild(mk('div', 'note', '行が多いため、先頭の 500 人だけ表示しています。残りは名簿を分けて取り込んでください。'));
 
     var sum = mk('div', 'sumbar'); sum.id = 'isum'; b.appendChild(sum);
@@ -1171,7 +1171,7 @@ const JS = String.raw`
       P.roles.forEach(function (x) { rs.appendChild(new Option(x.jp, x.jp)); });
       if (!r.roleOk) rs.insertBefore(new Option('「' + r.roleRaw + '」→ 選んでください', '__ask'), rs.firstChild);
       rs.value = r.roleOk ? r.role : '__ask';
-      rs.onchange = function () { if (rs.value === '__ask') return; r.role = rs.value; r.roleOk = true; paintAll(); };
+      rs.onchange = function () { if (rs.value === '__ask') return; r.role = rs.value; r.roleOk = true; if (officer(r.role) && rowProblems(r).length === 0) r.include = true; paintAll(); };
       cR.appendChild(rs); tr.appendChild(cR);
       var cC = mk('td'), cc = mk('input'); cc.type = 'checkbox'; cc.setAttribute('aria-label', '名刺を作る');
       cc.onchange = function () { r.card = cc.checked; paintAll(); }; cC.appendChild(cc); tr.appendChild(cC);
@@ -1186,31 +1186,52 @@ const JS = String.raw`
     paintAll();
   }
 
-  /* 名簿にあって、肩書きに未登録の役職を、英語の表記つきでその場で追加する */
+  /* 名簿の役職と、肩書きの選択肢をそろえる（未登録の役職を英語の表記つきで追加 / 名簿にない役職を整理）*/
   var ROLE_HINTS = { '文サ': 'Culture Circle Liaison', '渉外': 'External Relations', '書記': 'Secretary', '会計': 'Treasurer', '広報': 'Public Relations' };
-  function unknownRolesBox(names) {
+  function rolesBox(P) {
+    var names = P.unknownRoles || [], roster = P.rosterRoles || [];
+    var removable = S.roles.filter(function (r) { return roster.indexOf(r.jp) < 0 && S.plain.indexOf(r.jp) < 0 && !(S.usage[r.jp] > 0); });
+    var inUse = S.roles.filter(function (r) { return roster.indexOf(r.jp) < 0 && S.plain.indexOf(r.jp) < 0 && S.usage[r.jp] > 0; });
+    if (!names.length && !removable.length) return null;
     var box = mk('div', 'note');
-    box.appendChild(mk('div', '', '<b>名簿にある役職のうち、まだ肩書きに登録されていないものがあります。</b>英語の表記（名刺に載ります）を確認して追加できます。'));
+    box.appendChild(mk('div', '', '<b>名簿の役職：' + roster.map(esc).join('・') + '</b>'));
     var rows = [];
-    names.forEach(function (n) {
-      var r = mk('div', 'crow'); r.style.borderTop = '0';
-      var nm = mk('span', 'nm', '<b>' + esc(n) + '</b>'); nm.style.flex = 'none'; nm.style.minWidth = '90px';
-      var en = mk('input', 'in'); en.value = ROLE_HINTS[n] || ''; en.placeholder = '英語の表記（例: Secretary）'; en.maxLength = 40; en.style.maxWidth = '320px';
-      r.appendChild(nm); r.appendChild(en); box.appendChild(r); rows.push({ jp: n, input: en });
-    });
-    var go = mk('button', 'btn primary', '肩書きに追加して読み直す'); go.type = 'button'; go.style.marginTop = '10px';
+    if (names.length) {
+      box.appendChild(mk('div', '', 'まだ肩書きにない役職があります。英語の表記（名刺に載ります）を確認して追加できます。'));
+      names.forEach(function (n) {
+        var r = mk('div', 'crow'); r.style.borderTop = '0';
+        var nm = mk('span', 'nm', '<b>' + esc(n) + '</b>'); nm.style.flex = 'none'; nm.style.minWidth = '90px';
+        var en = mk('input', 'in'); en.value = ROLE_HINTS[n] || ''; en.placeholder = '英語の表記（例: Secretary）'; en.maxLength = 40; en.style.maxWidth = '320px';
+        r.appendChild(nm); r.appendChild(en); box.appendChild(r); rows.push({ jp: n, input: en });
+      });
+    }
+    var align = null;
+    if (removable.length) {
+      var lb = mk('label', 'sw'); lb.style.margin = '10px 0 4px'; align = mk('input'); align.type = 'checkbox'; align.checked = true;
+      lb.appendChild(align); lb.appendChild(mk('span', 'knob'));
+      lb.appendChild(mk('span', '', '<b>肩書きの選択肢を名簿の役職にそろえる</b><small>名簿にない「' + removable.map(function (r) { return esc(r.jp); }).join('・') + '」を選択肢から外します' + (inUse.length ? '（使用中の「' + inUse.map(function (r) { return esc(r.jp); }).join('・') + '」は残ります）' : '') + '</small>'));
+      box.appendChild(lb);
+    }
+    var go = mk('button', 'btn primary', '肩書きに反映して読み直す'); go.type = 'button'; go.style.marginTop = '10px';
     go.onclick = function () {
       var add = rows.map(function (x) { return { jp: x.jp, en: x.input.value.trim() }; });
       var bad = add.filter(function (x) { return !x.en || /["\\]/.test(x.en) || /["\\]/.test(x.jp) || x.jp.length > 16; })[0];
       if (bad) { toast('「' + bad.jp + '」の英語の表記を入れてください（引用符は使えません。肩書きは 16 文字まで）', 'err'); return; }
+      var byJp = {}; S.roles.forEach(function (r) { byJp[r.jp] = r; }); add.forEach(function (r) { byJp[r.jp] = r; });
+      var next = roster.filter(function (n) { return byJp[n]; }).map(function (n) { return pick(byJp[n]); });
+      S.roles.forEach(function (r) {
+        if (roster.indexOf(r.jp) >= 0) return;
+        if (align && align.checked && removable.indexOf(r) >= 0) return;
+        next.push(pick(r));
+      });
       go.disabled = true;
-      api('PUT', '/admin/api/roles', { roles: S.roles.map(pick).concat(add) }).then(function (j) {
+      api('PUT', '/admin/api/roles', { roles: next }).then(function (j) {
         S.roles = j.roles; S.usage = j.usage; S.rdraft = S.roles.map(function (x) { return { jp: x.jp, en: x.en, orig: true }; }); S.rorig = clone(S.rdraft);
-        toast('肩書きに追加しました', 'ok'); return parseRoster(S.imp.map, S.imp.header);
+        toast('肩書きに反映しました', 'ok'); return parseRoster(S.imp.map, S.imp.header);
       }).catch(function (e) { go.disabled = false; toast(e.message, 'err'); });
     };
     box.appendChild(go);
-    box.appendChild(mk('div', 'hint', '追加せずに、下の一覧で人ごとに役職を選ぶこともできます（「役職なし」にもできます）。'));
+    box.appendChild(mk('div', 'hint', '反映しない場合は、下の一覧で人ごとに役職を選ぶこともできます（「役職なし」にもできます）。'));
     return box;
   }
 

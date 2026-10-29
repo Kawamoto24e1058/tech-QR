@@ -251,6 +251,8 @@ async function parseRoster(request: Request, env: Env): Promise<Response> {
     plain: PLAIN_ROLES,
     headerRow: headerRow + 1,
     unknownRoles: [...new Set(rows.flatMap((r) => r.roleUnknown))],
+    // 名簿に出てくる役職（出てきた順）。肩書きの選択肢を名簿に揃えるのに使う
+    rosterRoles: [...new Set(rows.flatMap((r) => (r.roleRaw ? r.roleRaw.split("・") : [])))],
     total: table.length - headerRow - 1,
     truncated: table.length - headerRow - 1 > MAX_ROWS,
     rows: rows.map((r) => {

@@ -623,7 +623,8 @@ describe("名簿の取り込み", () => {
       ["", "", false, false],
     ]);
     expect(j.rows[2].problems.join()).toContain("未登録の役職「会計」");
-    expect(j.unknownRoles).toEqual(["会計"]); // 肩書きに追加できるよう、未登録の役職を集めて返す
+    expect(j.unknownRoles).toEqual(["会計"]);
+    expect(j.rosterRoles).toEqual(["部長", "会計"]); // 名簿に出てくる役職（出てきた順） // 肩書きに追加できるよう、未登録の役職を集めて返す
     expect(j.rows[3].problems.join()).toContain("ID を決められません");
     expect(notion.pages.length).toBe(before);
   });
