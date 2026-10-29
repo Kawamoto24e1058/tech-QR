@@ -53,9 +53,9 @@ export async function buildFrontCard(f: CardFields, opts: RenderOpts = {}): Prom
   return svg(front(ts, f), opts);
 }
 
+/** 裏面は QR とロゴだけで文字がないので、フォントの取得は要らない */
 export async function buildBackCard(_f: CardFields, qrTargetUrl: string, opts: RenderOpts = {}): Promise<string> {
-  const ts = await buildTypesetter((t) => back(t, qrTargetUrl), opts.fontLoader ?? googleFontLoader);
-  return svg(back(ts, qrTargetUrl), opts);
+  return svg(back(qrTargetUrl), opts);
 }
 
 /** ロゴは 1 度だけ <symbol> として定義し、何度でも <use> で置く（SVG が太らない） */
@@ -191,34 +191,23 @@ function front(ts: Typesetter, f: CardFields): string {
 }
 
 /* ────────────────────────────────────────────────────────────
- *  裏面（左に案内、右に QR）
+ *  裏面（QR とロゴだけ）
  * ──────────────────────────────────────────────────────────── */
 
-function back(ts: Typesetter, qrUrl: string): string {
+function back(qrUrl: string): string {
   const out: string[] = [];
   out.push(frame());
 
-  // 左の列: ロゴ → 案内文 → 矢印 → URL（QR と同じ高さに収める）
-  out.push(logo(L, 70, 46));
-  const col = 400;
-  const l1 = "プロフィールと";
-  const l2 = "リンクを見る";
-  const size = Math.min(fitSize(ts, "jp", l1, 44, col, 28), fitSize(ts, "jp", l2, 44, col, 28));
-  out.push(ts.text("jp", l1, L, 232, size));
-  out.push(ts.text("jp", l2, L, 232 + size * 1.28, size));
-  const ay = 232 + size * 1.28 + 38;
-  out.push(`<path d="M${L} ${num(ay)}H${L + 176}M${L + 158} ${num(ay - 16)}L${L + 176} ${num(ay)}L${L + 158} ${num(ay + 16)}" fill="none" stroke="${PAPER}" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>`);
-
-  const [host, path = ""] = qrUrl.replace(/^https?:\/\//, "").split(/(?=\/p\/)/);
-  if (host) out.push(ts.text("mono", host, L, 418, fitSize(ts, "mono", host, 17, col, 11), { fill: SOFT, opacity: 0.8 }));
-  if (path) out.push(ts.text("mono", path, L, 444, fitSize(ts, "mono", path, 17, col, 11)));
-
-  // 右: QR は白い角丸パネルいっぱい（パネルの余白がそのまま QR の静かな領域になる）
-  const pw = 320;
-  const px = R - pw;
-  const py = (550 - pw) / 2;
+  // 中央に QR（白い角丸パネルいっぱい。パネルの余白がそのまま QR の静かな領域になる）
+  const pw = 300;
+  const px = (910 - pw) / 2;
+  const py = 84;
   out.push(`<rect x="${px}" y="${py}" width="${pw}" height="${pw}" rx="22" fill="${PAPER}"/>`);
   out.push(qr(qrUrl || "https://example.com", px, py, pw));
+
+  // 下にロゴだけ
+  const lw = 34;
+  out.push(logo((910 - lw) / 2, 420, lw));
   return out.join("\n  ");
 }
 

@@ -459,7 +459,8 @@ describe("/admin/api/preview", () => {
   it("renders the back card with the QR pointing at the draft id, and tolerates garbage input", async () => {
     const cookie = await login();
     const back = await (await api(cookie, "POST", "/admin/api/preview", { side: "back", member: member({ id: "kai" }) })).text();
-    expect(back).toContain('aria-label="/p/kai"');
+    const other = await (await api(cookie, "POST", "/admin/api/preview", { side: "back", member: member({ id: "mei" }) })).text();
+    expect(other).not.toBe(back); // QR の中身が ID で変わる
 
     const junk = await api(cookie, "POST", "/admin/api/preview", { side: "front", member: { nameJp: 123, skills: "x", id: "bad id" } });
     expect(junk.status).toBe(200);

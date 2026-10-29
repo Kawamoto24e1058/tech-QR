@@ -262,12 +262,11 @@ describe("GET /generate/:id/back", () => {
 
     const svg = await res.text();
     expect(svg).toContain('viewBox="-30 -30 970 610"');
-    expect(svg).toContain('aria-label="リンクを見る"');
+    expect(svg).toContain('<use href="#lg"'); // ロゴ
     // QR modules are rendered in the dark ink colour
     expect(svg).toContain('<g fill="#0a0a0c">');
-    // display URL derived from request origin
-    expect(svg).toContain('aria-label="qr.test"');
-    expect(svg).toContain('aria-label="/p/haruharu"');
+    // 裏面は QR とロゴだけ（文字は出さない）
+    expect(svg).not.toContain('role="img"');
   });
 
   it("accepts /back.svg", async () => {
@@ -294,10 +293,10 @@ describe("GET /generate/:id/back", () => {
     const url = "https://qr.test/p/haruharu";
     const { data, size: n } = encode(url, { ecc: "Q", border: 0 });
 
-    // back() の qr(url, px, py, pw) = qr(url, 522, 115, 320)
-    const OX = 522;
-    const OY = 115;
-    const SIZE = 320;
+    // back() の qr(url, px, py, pw) = qr(url, 305, 84, 300)
+    const OX = 305;
+    const OY = 84;
+    const SIZE = 300;
     const quiet = 4;
     const cell = SIZE / (n + quiet * 2);
     const inFinder = (r: number, c: number) =>
@@ -377,7 +376,7 @@ describe("GET /preview/:id", () => {
     expect(html).toContain("山田 太郎");
     // both card SVGs embedded
     expect(html.match(/<svg /g)?.length).toBeGreaterThanOrEqual(2);
-    expect(html).toContain('aria-label="リンクを見る"'); // back card present
+    expect(html).toContain('<g fill="#0a0a0c">'); // back card present (QR)
     expect(html).toContain('viewBox="0 0 910 550"'); // 画面表示は仕上がりサイズ
     // download links point at the attachment endpoints
     expect(html).toContain('href="/generate/haruharu" download');
