@@ -9,6 +9,7 @@
  * - 黒は #0a0a0c（画面用）。印刷所には「リッチブラック（K100 + C/M/Y 少量）」を指定するときれいに出る
  */
 import { encode } from "uqr";
+import { board, CHIP } from "./circuit";
 import { buildTypesetter, fitSize, googleFontLoader, type FontLoader, type Typesetter } from "./fonts";
 import { LOGO_HEIGHT, LOGO_WHITE_DATA_URI, LOGO_WIDTH } from "./logo";
 
@@ -53,9 +54,9 @@ export async function buildFrontCard(f: CardFields, opts: RenderOpts = {}): Prom
   return svg(front(ts, f), opts);
 }
 
-/** 裏面は QR とロゴだけで文字がないので、フォントの取得は要らない */
 export async function buildBackCard(_f: CardFields, qrTargetUrl: string, opts: RenderOpts = {}): Promise<string> {
-  return svg(back(qrTargetUrl), opts);
+  const ts = await buildTypesetter((t) => back(t, qrTargetUrl), opts.fontLoader ?? googleFontLoader);
+  return svg(back(ts, qrTargetUrl), opts);
 }
 
 /** ロゴは 1 度だけ <symbol> として定義し、何度でも <use> で置く（SVG が太らない） */
@@ -191,23 +192,21 @@ function front(ts: Typesetter, f: CardFields): string {
 }
 
 /* ────────────────────────────────────────────────────────────
- *  裏面（QR とロゴだけ）
+ *  裏面（QR を載せた IC を中心にした基板。src/circuit.ts）
  * ──────────────────────────────────────────────────────────── */
 
-function back(qrUrl: string): string {
-  const out: string[] = [];
-  out.push(frame());
+function back(ts: Typesetter, qrUrl: string): string {
+  const out: string[] = [frame(), board(ts)];
 
-  // 中央に QR（白い角丸パネルいっぱい。パネルの余白がそのまま QR の静かな領域になる）
-  const pw = 300;
-  const px = (910 - pw) / 2;
-  const py = 84;
-  out.push(`<rect x="${px}" y="${py}" width="${pw}" height="${pw}" rx="22" fill="${PAPER}"/>`);
+  // U1 の中に QR（白い角丸パネルいっぱい。パネルの余白がそのまま QR の静かな領域になる）
+  const pw = 270;
+  const px = (CHIP.x0 + CHIP.x1) / 2 - pw / 2;
+  const py = (CHIP.y0 + CHIP.y1) / 2 - pw / 2;
+  out.push(`<rect x="${px}" y="${py}" width="${pw}" height="${pw}" rx="20" fill="${PAPER}"/>`);
   out.push(qr(qrUrl || "https://example.com", px, py, pw));
 
-  // 下にロゴだけ
-  const lw = 34;
-  out.push(logo((910 - lw) / 2, 420, lw));
+  // 左下の部品枠にロゴ
+  out.push(logo(79, 452, 32));
   return out.join("\n  ");
 }
 

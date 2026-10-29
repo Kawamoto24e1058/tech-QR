@@ -265,8 +265,8 @@ describe("GET /generate/:id/back", () => {
     expect(svg).toContain('<use href="#lg"'); // ロゴ
     // QR modules are rendered in the dark ink colour
     expect(svg).toContain('<g fill="#0a0a0c">');
-    // 裏面は QR とロゴだけ（文字は出さない）
-    expect(svg).not.toContain('role="img"');
+    // 基板のシルク印刷（アウトライン化された文字）
+    expect(svg).toContain('aria-label="U1"');
   });
 
   it("accepts /back.svg", async () => {
@@ -293,10 +293,10 @@ describe("GET /generate/:id/back", () => {
     const url = "https://qr.test/p/haruharu";
     const { data, size: n } = encode(url, { ecc: "Q", border: 0 });
 
-    // back() の qr(url, px, py, pw) = qr(url, 305, 84, 300)
-    const OX = 305;
-    const OY = 84;
-    const SIZE = 300;
+    // back() の qr(url, px, py, pw) = qr(url, 320, 140, 270)
+    const OX = 320;
+    const OY = 140;
+    const SIZE = 270;
     const quiet = 4;
     const cell = SIZE / (n + quiet * 2);
     const inFinder = (r: number, c: number) =>
