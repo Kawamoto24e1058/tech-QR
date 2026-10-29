@@ -9,6 +9,7 @@
  *       未設定のときは管理画面ごと無効（フェイルクローズ）。
  */
 import { buildAdminPage, buildLoginPage, buildNoPasswordPage } from "./admin-page";
+import { buildBackCard, buildFrontCard, type CardFields } from "./card-template";
 import { invalidateMember } from "./lookup";
 import {
   archiveMember,
@@ -17,6 +18,7 @@ import {
   getRoles,
   ID_PATTERN,
   listMembersFull,
+  normalizeHandle,
   saveRoles,
   updateMember,
   validRoleText,
@@ -73,6 +75,8 @@ export async function handleAdmin(request: Request, env: Env): Promise<Response 
 /* ── API ──────────────────────────────────────────────── */
 
 async function api(request: Request, env: Env, path: string, method: string): Promise<Response> {
+  if (path === "/admin/api/preview" && method === "POST") return previewCard(request, env);
+
   if (path === "/admin/api/members") {
     if (method === "GET") return json({ members: (await listMembersFull(env)).map(toEdit) });
     if (method === "POST") {
@@ -135,6 +139,30 @@ async function api(request: Request, env: Env, path: string, method: string): Pr
   }
 
   return json({ error: "not found" }, 404);
+}
+
+/** 入力途中（未保存）の内容で名刺を描画する。検証はせず、表示用に整えるだけ（SVG 側でエスケープされる） */
+async function previewCard(request: Request, env: Env): Promise<Response> {
+  const b = (await readJson(request)) as { side?: string; member?: Record<string, unknown> };
+  const m = b.member ?? {};
+  const clip = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
+  const fields: CardFields = {
+    nameJp: clip(m.nameJp, 40),
+    nameEn: clip(m.nameEn, 60),
+    roleJp: clip(m.role, 16),
+    roleEn: clip(m.roleEn, 40),
+    email: clip(m.email, 100).replace(/^mailto:/i, ""),
+    githubId: normalizeHandle(clip(m.githubId, 80), ["github.com"]).slice(0, 50),
+    xId: normalizeHandle(clip(m.xId, 80), ["x.com", "twitter.com"]).slice(0, 50),
+    skillTags: (Array.isArray(m.skills) ? m.skills : []).slice(0, 10).map((t) => clip(t, 24)).filter(Boolean),
+  };
+  const id = ID_PATTERN.test(clip(m.id, 64)) ? clip(m.id, 64) : "your-id";
+  const base = (env.PUBLIC_BASE_URL || new URL(request.url).origin).replace(/\/+$/, "");
+  const opts = { logoHref: "/assets/logo.png" };
+  const svg = b.side === "back" ? buildBackCard(fields, `${base}/p/${id}`, opts) : buildFrontCard(fields, opts);
+  return new Response(svg, {
+    headers: { "Content-Type": "image/svg+xml; charset=utf-8", "Cache-Control": "no-store" },
+  });
 }
 
 async function rolesWithUsage(env: Env) {
@@ -212,16 +240,9 @@ function parseInput(
     return fail("email", "メールアドレスの形式が正しくありません");
   }
 
-  const handle = (v: unknown, hosts: string[]): string => {
-    let s = str(v).replace(/^@/, "");
-    for (const h of hosts) {
-      s = s.replace(new RegExp(`^https?://(www\\.)?${h.replace(/\./g, "\\.")}/`, "i"), "");
-    }
-    return s.replace(/[/\s]+$/, "");
-  };
-  const githubId = handle(b.githubId, ["github.com"]);
+  const githubId = normalizeHandle(str(b.githubId), ["github.com"]);
   if (githubId && !HANDLE.test(githubId)) return fail("githubId", "GitHub の ID に使えない文字が含まれています");
-  const xId = handle(b.xId, ["x.com", "twitter.com"]);
+  const xId = normalizeHandle(str(b.xId), ["x.com", "twitter.com"]);
   if (xId && !HANDLE.test(xId)) return fail("xId", "X の ID に使えない文字が含まれています");
 
   const tags = (Array.isArray(b.skills) ? b.skills : str(b.skills).split(/[,、，]/))

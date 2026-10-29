@@ -399,6 +399,54 @@ describe("/admin/api/members", () => {
 });
 
 /* ────────────────────────────────────────────────────────────
+ *  ライブプレビュー（未保存の入力で名刺を描画）
+ * ──────────────────────────────────────────────────────────── */
+
+describe("/admin/api/preview", () => {
+  it("requires login", async () => {
+    const res = await req("/admin/api/preview", { method: "POST", body: "{}" });
+    expect(res.status).toBe(401);
+  });
+
+  it("renders the front card from unsaved draft values, with a lightweight logo reference", async () => {
+    const cookie = await login();
+    const res = await api(cookie, "POST", "/admin/api/preview", {
+      side: "front",
+      member: member({ roleEn: "President", githubId: "https://github.com/octo/" }),
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("image/svg+xml; charset=utf-8");
+    const svg = await res.text();
+    expect(svg).toContain("山田 太郎");
+    expect(svg).toContain("PRESIDENT");
+    expect(svg).toContain("github.com/octo"); // URL を貼っても ID に直る
+    expect(svg).toContain('href="/assets/logo.png"');
+    expect(svg).not.toContain("data:image/png;base64");
+    expect(notion.calls.length).toBe(0); // プレビューは Notion を呼ばない
+  });
+
+  it("renders the back card with the QR pointing at the draft id, and tolerates garbage input", async () => {
+    const cookie = await login();
+    const back = await (await api(cookie, "POST", "/admin/api/preview", { side: "back", member: member({ id: "kai" }) })).text();
+    expect(back).toContain("qr.test/p/kai");
+
+    const junk = await api(cookie, "POST", "/admin/api/preview", { side: "front", member: { nameJp: 123, skills: "x", id: "bad id" } });
+    expect(junk.status).toBe(200);
+    const empty = await api(cookie, "POST", "/admin/api/preview", {});
+    expect(empty.status).toBe(200);
+  });
+
+  it("escapes markup in draft values", async () => {
+    const cookie = await login();
+    const svg = await (
+      await api(cookie, "POST", "/admin/api/preview", { side: "front", member: member({ nameJp: "<script>alert(1)</script>" }) })
+    ).text();
+    expect(svg).not.toContain("<script>alert(1)</script>");
+    expect(svg).toContain("&lt;script&gt;");
+  });
+});
+
+/* ────────────────────────────────────────────────────────────
  *  肩書き
  * ──────────────────────────────────────────────────────────── */
 

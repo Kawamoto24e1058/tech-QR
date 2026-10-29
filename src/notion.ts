@@ -239,7 +239,7 @@ function toMember(page: NotionPage): Member {
 }
 
 /** "@name" / "https://github.com/name/" などを "name" に正規化 */
-function normalizeHandle(raw: string, hosts: string[]): string {
+export function normalizeHandle(raw: string, hosts: string[]): string {
   let s = raw.trim().replace(/^@/, "");
   for (const host of hosts) {
     s = s.replace(new RegExp(`^https?://(www\\.)?${host.replace(/\./g, "\\.")}/`, "i"), "");
