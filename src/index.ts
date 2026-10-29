@@ -19,7 +19,7 @@ import { handleAdmin } from "./admin";
 import { logoBlackPng, logoWhitePng } from "./assets";
 import { buildBackCard, buildFrontCard, escapeXml } from "./card-template";
 import { FontError } from "./fonts";
-import { lookup } from "./lookup";
+import { cardSettings, lookup } from "./lookup";
 import { getMember, ID_PATTERN, listMembers } from "./notion";
 import { buildCardPreview, buildIndexPage } from "./preview";
 import { buildProfilePage } from "./profile";
@@ -93,8 +93,9 @@ export default {
         const member = ID_PATTERN.test(id) ? await getMember(id, env) : null;
         if (!member) return notFound(id);
         // 文字のアウトライン化にフォント取得が必要。失敗してもページ自体は出す（カードだけ「再読み込み」案内）
+        const settings = await cardSettings(env, ctx);
         const [front, back] = await Promise.all([
-          settle(() => buildFrontCard(member.fields, { bleed: false })),
+          settle(() => buildFrontCard(member.fields, { bleed: false, settings })),
           settle(() => buildBackCard(member.fields, `${base}/p/${id}`, { bleed: false })),
         ]);
         return html(buildCardPreview(member, base, { front, back }));
@@ -110,7 +111,7 @@ export default {
         try {
           return gen[2]
             ? svgDownload(await buildBackCard(member.fields, `${base}/p/${id}`, { bleed }), `${id}-card-back`)
-            : svgDownload(await buildFrontCard(member.fields, { bleed }), `${id}-card-front`);
+            : svgDownload(await buildFrontCard(member.fields, { bleed, settings: await cardSettings(env, ctx) }), `${id}-card-front`);
         } catch (err) {
           if (err instanceof FontError) return fontsUnavailable(err);
           throw err;

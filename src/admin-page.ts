@@ -196,6 +196,29 @@ select.in{appearance:none;background-image:linear-gradient(45deg,transparent 50%
 .res{border:1px solid var(--line);background:var(--panel);border-radius:12px;padding:16px 20px;margin:0 0 22px;line-height:1.9}
 .res .bad{color:var(--err)}
 
+/* card tab */
+.cview{max-width:1180px;margin:0 auto;padding:30px 32px 140px}
+.cview h2{margin:0 0 6px;font-size:26px;font-weight:800}
+.cview .lead{color:var(--mut);font-size:14.5px;margin:0 0 22px;line-height:1.8}
+.cgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.05fr);gap:28px;align-items:start}
+.csec{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px 22px;margin-bottom:18px}
+.csec h3{margin:0 0 12px;font-size:15px;font-weight:800}
+.crow{display:flex;align-items:center;gap:12px;padding:8px 0;border-top:1px solid var(--line)}
+.crow:first-of-type{border-top:0}
+.crow .nm{flex:1;font-weight:600}
+.crow .mvb{display:flex;gap:4px}
+.crow .mvb button{border:1px solid var(--line2);background:var(--panel2);color:var(--mut);width:30px;height:28px;border-radius:7px;font-size:11px;padding:0}
+.crow .mvb button:disabled{opacity:.25;cursor:default}
+.crow.offr .nm{color:var(--dim)}
+.cview .actions{left:0}
+.exp .rowx{display:flex;align-items:center;gap:12px;padding:9px 4px;border-top:1px solid var(--line)}
+.exp .rowx .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.exp .rowx code{font-family:"Courier New",monospace;color:var(--dim);font-size:12.5px;margin-left:8px}
+.exp .rowx a{font-size:13px;margin-left:4px}
+.exp .bar2{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:0 0 12px}
+.exp .bar2 select.in{width:auto;min-height:40px;padding:6px 36px 6px 12px}
+@media (max-width:1100px){.cgrid{grid-template-columns:1fr}}
+
 /* misc */
 dialog{background:var(--panel);color:var(--tx);border:1px solid var(--line2);border-radius:18px;padding:26px;max-width:460px;width:calc(100% - 32px);box-shadow:0 30px 80px rgba(0,0,0,.65)}
 dialog::backdrop{background:rgba(0,0,0,.65)}
@@ -294,7 +317,7 @@ const JS = String.raw`
   'use strict';
   var BASE = (document.body.getAttribute('data-base') || location.origin).replace(/\/+$/, '');
   var S = { members: [], roles: [], usage: {}, warnings: [], tab: 'members', sel: null, draft: null, orig: null,
-            mode: 'profile', q: '', filter: 'all', rdraft: null, rorig: null, plain: [], imp: null, busy: false, side: 'front', pvOpen: false, touched: {} };
+            mode: 'profile', q: '', filter: 'all', rdraft: null, rorig: null, plain: [], imp: null, cs: null, csorig: null, csSide: 'front', csId: '', busy: false, side: 'front', pvOpen: false, touched: {} };
 
   var ID_RE = /^[A-Za-z0-9._-]{1,64}$/, HANDLE_RE = /^[A-Za-z0-9_.-]{1,50}$/, EMAIL_RE = /^[^\s@<>"']+@[^\s@<>"']+\.[^\s@<>"']+$/;
 
@@ -339,7 +362,8 @@ const JS = String.raw`
   function memberDirty() { return !!(S.draft && S.orig && (strip(S.draft) !== strip(S.orig) || (S.mode === 'profile') !== !S.orig.targetUrl)); }
   function pick(r) { return { jp: r.jp, en: r.en }; }
   function rolesDirty() { return !!(S.rdraft && JSON.stringify(S.rdraft.map(pick)) !== JSON.stringify(S.rorig.map(pick))); }
-  function dirty() { return S.tab === 'members' ? memberDirty() : S.tab === 'roles' ? rolesDirty() : false; }
+  function csDirty() { return !!(S.cs && S.csorig && JSON.stringify(S.cs) !== JSON.stringify(S.csorig)); }
+  function dirty() { return S.tab === 'members' ? memberDirty() : S.tab === 'roles' ? rolesDirty() : S.tab === 'card' ? csDirty() : false; }
   function officer(role) { return !!role && S.plain.indexOf(String(role).trim()) < 0; }
   function cardOf(m) { return officer(m.role) || !!m.card; }
   function guard() { return dirty() ? ask('保存していない変更があります。破棄して移動しますか？', '破棄して移動', true) : Promise.resolve(true); }
@@ -352,8 +376,8 @@ const JS = String.raw`
 
   /* ── 読み込み ── */
   function load() {
-    return Promise.all([api('GET', '/admin/api/members'), api('GET', '/admin/api/roles')]).then(function (r) {
-      S.members = r[0].members; S.roles = r[1].roles; S.plain = r[1].plain || []; S.usage = r[1].usage; S.warnings = r[1].warnings || [];
+    return Promise.all([api('GET', '/admin/api/members'), api('GET', '/admin/api/roles'), api('GET', '/admin/api/card-settings')]).then(function (r) {
+      S.members = r[0].members; S.roles = r[1].roles; S.plain = r[1].plain || []; S.cs = clone(r[2].settings); S.csorig = clone(r[2].settings); S.usage = r[1].usage; S.warnings = r[1].warnings || [];
       S.rdraft = S.roles.map(function (x) { return { jp: x.jp, en: x.en, orig: true }; }); S.rorig = clone(S.rdraft);
       render();
     }).catch(function (e) { $('#app').innerHTML = '<div class="loading">読み込みに失敗しました: ' + esc(e.message) + '</div>'; });
@@ -362,7 +386,7 @@ const JS = String.raw`
   /* ── 描画 ── */
   function render() {
     [].forEach.call(document.querySelectorAll('.tabs button'), function (b) { b.classList.toggle('on', b.getAttribute('data-tab') === S.tab); });
-    if (S.tab === 'members') renderMembers(); else if (S.tab === 'roles') renderRoles(); else renderImport();
+    if (S.tab === 'members') renderMembers(); else if (S.tab === 'roles') renderRoles(); else if (S.tab === 'card') renderCard(); else renderImport();
   }
   function initial(m) { return esc((m.nameJp || m.id || '?').charAt(0)); }
 
@@ -576,7 +600,7 @@ const JS = String.raw`
   function drawPreview() {
     var pc = $('#pvc'); if (!pc || !S.draft) return;
     var my = ++pvSeq; var d = S.draft;
-    fetch('/admin/api/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ side: S.side, member: d }) })
+    fetch('/admin/api/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ side: S.side, member: d, settings: S.cs }) })
       .then(function (r) { if (r.status === 401) { location.reload(); } return r.ok ? r.text() : null; })
       .then(function (svg) { if (my === pvSeq && svg && $('#pvc')) { $('#pvc').innerHTML = svg; var s = $('#pvc svg'); if (s) { s.removeAttribute('width'); s.removeAttribute('height'); } } })
       .catch(function () { /* プレビュー失敗は無視（保存には影響しない） */ });
@@ -790,6 +814,184 @@ const JS = String.raw`
   }
 
 
+
+  /* ── 名刺（表面に載せる項目 + 書き出し）── */
+  var KIND_LABEL = { mail: 'メール', github: 'GitHub', x: 'X' };
+  var ALL_KINDS = ['mail', 'github', 'x'];
+  function cardMembers() { return S.members.filter(cardOf); }
+  function sampleMember() {
+    var m = S.members.filter(function (x) { return x.id === S.csId; })[0] || cardMembers()[0] || S.members[0];
+    if (m) return m;
+    return { id: 'your-id', nameJp: '山田 太郎', nameEn: 'Taro Yamada', role: '部長', roleEn: 'President', email: 'taro@example.com', githubId: 'taro-dev', xId: 'taro_dev', skills: ['TypeScript', 'Cloudflare', 'UI/UX Design'], targetUrl: '', active: true };
+  }
+  function renderCard() {
+    var app = $('#app'); app.innerHTML = '';
+    var v = mk('div', 'cview');
+    v.appendChild(mk('h2', '', '名刺'));
+    v.appendChild(mk('p', 'lead', '表面に載せる項目を決めます。<b>変更は部員全員の名刺に反映</b>されます（保存するまでは、右のプレビューだけ変わります）。名刺の書き出しもここからできます。'));
+    var grid = mk('div', 'cgrid'); var left = mk('div'), right = mk('div');
+
+    /* 連絡先 */
+    var s1 = mk('section', 'csec'); s1.appendChild(mk('h3', '', '連絡先（載せるものと順番）'));
+    var rows = mk('div'); s1.appendChild(rows);
+    function drawKinds() {
+      rows.innerHTML = '';
+      var order = S.cs.contacts.concat(ALL_KINDS.filter(function (k) { return S.cs.contacts.indexOf(k) < 0; }));
+      order.forEach(function (k) {
+        var on = S.cs.contacts.indexOf(k) >= 0, i = S.cs.contacts.indexOf(k);
+        var r = mk('div', 'crow' + (on ? '' : ' offr'));
+        var sw = mk('label', 'sw'), cb = mk('input'); cb.type = 'checkbox'; cb.checked = on;
+        cb.onchange = function () { if (cb.checked) S.cs.contacts.push(k); else S.cs.contacts = S.cs.contacts.filter(function (x) { return x !== k; }); changed(); drawKinds(); };
+        sw.appendChild(cb); sw.appendChild(mk('span', 'knob')); r.appendChild(sw);
+        r.appendChild(mk('span', 'nm', KIND_LABEL[k]));
+        var mv = mk('span', 'mvb'), up = mk('button', '', '▲'), dn = mk('button', '', '▼'); up.type = dn.type = 'button';
+        up.disabled = !on || i === 0; dn.disabled = !on || i === S.cs.contacts.length - 1;
+        up.onclick = function () { var c = S.cs.contacts; var t = c[i - 1]; c[i - 1] = c[i]; c[i] = t; changed(); drawKinds(); };
+        dn.onclick = function () { var c = S.cs.contacts; var t = c[i + 1]; c[i + 1] = c[i]; c[i] = t; changed(); drawKinds(); };
+        mv.appendChild(up); mv.appendChild(dn); r.appendChild(mv); rows.appendChild(r);
+      });
+      s1.querySelector('.hint') || s1.appendChild(mk('div', 'hint', '名刺に載るのは先頭から 3 つまで（左の 2 段、右の 1 段の順）。メンバーが入力していない項目は載りません。'));
+    }
+    drawKinds(); left.appendChild(s1);
+
+    /* スキル */
+    var s2 = mk('section', 'csec'); s2.appendChild(mk('h3', '', 'スキルを載せる数'));
+    var seg = mk('div', 'seg2');
+    [0, 1, 2, 3].forEach(function (n) {
+      var b = mk('button', S.cs.skills === n ? 'on' : '', n === 0 ? '載せない' : n + ' 個'); b.type = 'button';
+      b.onclick = function () { S.cs.skills = n; [].forEach.call(seg.children, function (x, i) { x.classList.toggle('on', i === n); }); changed(); };
+      seg.appendChild(b);
+    });
+    s2.appendChild(seg); left.appendChild(s2);
+
+    /* その他 */
+    var s3 = mk('section', 'csec'); s3.appendChild(mk('h3', '', 'そのほか'));
+    [['showNameEn', '英語の氏名（ローマ字）', '氏名の下の段に載ります'], ['showRoleEn', '英語の肩書き', '日本語の肩書きの右に載ります'], ['showId', 'ヘッダの「DEV TEAM / ID」', 'ロゴの横の小さな 1 行です']].forEach(function (o) {
+      var r = mk('div', 'crow'); var sw = mk('label', 'sw'), cb = mk('input'); cb.type = 'checkbox'; cb.checked = !!S.cs[o[0]];
+      cb.onchange = function () { S.cs[o[0]] = cb.checked; changed(); };
+      sw.appendChild(cb); sw.appendChild(mk('span', 'knob')); r.appendChild(sw); r.appendChild(mk('span', 'nm', esc(o[1]) + '<div class="hint" style="margin:0">' + esc(o[2]) + '</div>')); s3.appendChild(r);
+    });
+    left.appendChild(s3);
+
+    /* プレビュー */
+    var pv = mk('section', 'csec'); pv.appendChild(mk('h3', '', 'プレビュー'));
+    var bar = mk('div', 'bar2');
+    var sel = mk('select', 'in'); var ms = S.members.length ? S.members : [sampleMember()];
+    ms.forEach(function (m) { sel.appendChild(new Option((m.nameJp || m.id) + '（' + m.id + '）', m.id)); });
+    sel.value = sampleMember().id; S.csId = sel.value; sel.onchange = function () { S.csId = sel.value; drawCardPv(); };
+    var seg2 = mk('div', 'seg2'); seg2.style.width = '180px';
+    [['front', '表面'], ['back', '裏面']].forEach(function (x) {
+      var b = mk('button', S.csSide === x[0] ? 'on' : '', x[1]); b.type = 'button';
+      b.onclick = function () { S.csSide = x[0]; [].forEach.call(seg2.children, function (y) { y.classList.toggle('on', y === b); }); drawCardPv(); };
+      seg2.appendChild(b);
+    });
+    bar.appendChild(sel); bar.appendChild(seg2); pv.appendChild(bar);
+    var box = mk('div', 'pvbox'); var pc = mk('div', 'pvc'); pc.id = 'cpc'; pc.style.minHeight = '120px'; box.appendChild(pc); pv.appendChild(box);
+    right.appendChild(pv);
+
+    /* 書き出し */
+    var ex = mk('section', 'csec exp'); ex.appendChild(mk('h3', '', '名刺の書き出し'));
+    ex.appendChild(mk('div', 'hint', '名刺を作る人（役職がある人 + 名刺希望の人）の表と裏を SVG で書き出します。文字はアウトライン化済みで、入稿用は塗り足し 3mm 付きです。'));
+    ex.lastChild.style.marginBottom = '12px';
+    var bar2 = mk('div', 'bar2');
+    var bl = mk('select', 'in'); bl.appendChild(new Option('塗り足し 3mm あり（入稿用）', '1')); bl.appendChild(new Option('塗り足しなし（仕上がりサイズ）', '0')); bl.id = 'bleed';
+    var all = mk('button', 'btn primary', '選んだ人を ZIP でまとめてダウンロード'); all.type = 'button'; all.id = 'zipgo'; all.onclick = exportZip;
+    bar2.appendChild(bl); bar2.appendChild(all); ex.appendChild(bar2);
+    var st = mk('div', 'hint'); st.id = 'zipst'; ex.appendChild(st);
+    var list = mk('div'); list.id = 'exlist'; ex.appendChild(list);
+    right.appendChild(ex);
+
+    grid.appendChild(left); grid.appendChild(right); v.appendChild(grid);
+
+    var act = mk('div', 'actions'); var inner = mk('div', 'inner');
+    var save = mk('button', 'btn primary', '保存'); save.type = 'button'; save.id = 'cssave'; save.style.minWidth = '120px'; save.onclick = saveCardSettings;
+    var rv = mk('button', 'btn', '元に戻す'); rv.type = 'button'; rv.id = 'csrev'; rv.onclick = function () { S.cs = clone(S.csorig); renderCard(); };
+    var note = mk('span', 'dirty-note'); note.id = 'csnote';
+    inner.appendChild(save); inner.appendChild(rv); inner.appendChild(note); act.appendChild(inner); v.appendChild(act);
+    app.appendChild(v);
+    drawExport(); changed(true);
+  }
+  var cpTimer, cpSeq = 0;
+  function changed(now) {
+    var d = csDirty(), sv = $('#cssave'), rv = $('#csrev'), n = $('#csnote');
+    if (sv) { sv.disabled = S.busy || !d; sv.textContent = S.busy ? '保存中…' : (d ? '保存して全員に反映' : '保存済み'); }
+    if (rv) rv.disabled = !d;
+    if (n) { n.className = d ? 'dirty-note' : 'saved-note'; n.textContent = d ? '● 未保存の変更があります' : '✓ 最新の状態です'; }
+    clearTimeout(cpTimer); cpTimer = setTimeout(drawCardPv, now ? 0 : 200);
+  }
+  function drawCardPv() {
+    var pc = $('#cpc'); if (!pc) return; var my = ++cpSeq, m = clone(sampleMember()); delete m.roleEn;
+    fetch('/admin/api/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ side: S.csSide, member: m, settings: S.cs }) })
+      .then(function (r) { if (r.status === 401) location.reload(); return r.ok ? r.text() : null; })
+      .then(function (svg) { if (my === cpSeq && svg && $('#cpc')) { $('#cpc').innerHTML = svg; var e = $('#cpc svg'); if (e) { e.removeAttribute('width'); e.removeAttribute('height'); } } })
+      .catch(function () {});
+  }
+  function saveCardSettings() {
+    if (S.busy || !csDirty()) return; S.busy = true; changed(true);
+    api('PUT', '/admin/api/card-settings', { settings: S.cs }).then(function (j) {
+      S.cs = clone(j.settings); S.csorig = clone(j.settings); toast('保存しました。全員の名刺に反映されます', 'ok');
+    }).catch(function (e) { toast(e.message, 'err'); }).then(function () { S.busy = false; changed(true); });
+  }
+
+  /* 書き出し（1 人ずつ / まとめて ZIP）。ZIP はブラウザの中で作る（1 枚ずつ取りに行くので、人数が多くても詰まらない） */
+  function drawExport() {
+    var l = $('#exlist'); if (!l) return; l.innerHTML = '';
+    var ms = cardMembers();
+    if (!ms.length) { l.appendChild(mk('div', 'hint', '名刺を作る人がいません。役職を設定するか、メンバーの「名刺を作る」にチェックを入れてください。')); $('#zipgo').disabled = true; return; }
+    ms.forEach(function (m) {
+      var r = mk('div', 'rowx'); var cb = mk('input'); cb.type = 'checkbox'; cb.checked = true; cb.setAttribute('data-id', m.id); cb.setAttribute('aria-label', m.nameJp || m.id);
+      r.appendChild(cb);
+      r.appendChild(mk('span', 'nm', esc(m.nameJp || '（名前未設定）') + '<code>' + esc(m.id) + '</code>'));
+      var q = function () { return $('#bleed').value === '0' ? '?bleed=0' : ''; };
+      var a1 = mk('a', '', '表面 ↓'), a2 = mk('a', '', '裏面 ↓');
+      a1.href = '/generate/' + encodeURIComponent(m.id); a2.href = '/generate/' + encodeURIComponent(m.id) + '/back';
+      a1.onclick = function () { a1.href = '/generate/' + encodeURIComponent(m.id) + q(); }; a2.onclick = function () { a2.href = '/generate/' + encodeURIComponent(m.id) + '/back' + q(); };
+      a1.setAttribute('download', ''); a2.setAttribute('download', '');
+      r.appendChild(a1); r.appendChild(a2); l.appendChild(r);
+    });
+  }
+  var CRC = (function () { var t = []; for (var n = 0; n < 256; n++) { var c = n; for (var k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+  function crc32(u8) { var c = 0xffffffff; for (var i = 0; i < u8.length; i++) c = CRC[(c ^ u8[i]) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; }
+  function zipStore(files) { // files: [{ name, data: Uint8Array }]（無圧縮の ZIP）
+    var enc = new TextEncoder(), parts = [], central = [], off = 0;
+    files.forEach(function (f) {
+      var nm = enc.encode(f.name), crc = crc32(f.data), lh = new DataView(new ArrayBuffer(30));
+      lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true); lh.setUint32(14, crc, true);
+      lh.setUint32(18, f.data.length, true); lh.setUint32(22, f.data.length, true); lh.setUint16(26, nm.length, true);
+      parts.push(new Uint8Array(lh.buffer), nm, f.data);
+      var ch = new DataView(new ArrayBuffer(46));
+      ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint16(8, 0x0800, true); ch.setUint32(16, crc, true);
+      ch.setUint32(20, f.data.length, true); ch.setUint32(24, f.data.length, true); ch.setUint16(28, nm.length, true); ch.setUint32(42, off, true);
+      central.push(new Uint8Array(ch.buffer), nm);
+      off += 30 + nm.length + f.data.length;
+    });
+    var size = central.reduce(function (n, p) { return n + p.length; }, 0), end = new DataView(new ArrayBuffer(22));
+    end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true); end.setUint32(12, size, true); end.setUint32(16, off, true);
+    return new Blob(parts.concat(central, [new Uint8Array(end.buffer)]), { type: 'application/zip' });
+  }
+  function exportZip() {
+    var ids = [].map.call(document.querySelectorAll('#exlist input[type=checkbox]:checked'), function (c) { return c.getAttribute('data-id'); });
+    if (!ids.length) { toast('書き出す人を選んでください', 'err'); return; }
+    var q = $('#bleed').value === '0' ? '?bleed=0' : '', jobs = [];
+    ids.forEach(function (id) { jobs.push({ name: id + '-card-front.svg', url: '/generate/' + encodeURIComponent(id) + q }); jobs.push({ name: id + '-card-back.svg', url: '/generate/' + encodeURIComponent(id) + '/back' + q }); });
+    var files = [], failed = [], i = 0, go = $('#zipgo'), st = $('#zipst'); go.disabled = true;
+    function one() {
+      var j = jobs[i++]; if (!j) return Promise.resolve();
+      st.textContent = '作成中… ' + (i - 1) + ' / ' + jobs.length;
+      return fetch(j.url).then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.arrayBuffer(); })
+        .then(function (b) { files.push({ name: j.name, data: new Uint8Array(b) }); })
+        .catch(function () { failed.push(j.name); }).then(one);
+    }
+    one().then(function () {
+      go.disabled = false;
+      if (!files.length) { st.textContent = '書き出せませんでした。少し待ってからもう一度お試しください。'; return; }
+      var a = document.createElement('a'); a.href = URL.createObjectURL(zipStore(files)); a.download = 'tech-club-cards' + (q ? '-trim' : '') + '.zip'; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+      st.textContent = files.length + ' 枚をダウンロードしました' + (failed.length ? '（失敗: ' + failed.join('、') + '）' : '');
+      if (failed.length) toast('一部の名刺を作れませんでした。もう一度お試しください', 'err'); else toast('ZIP をダウンロードしました', 'ok');
+    });
+  }
+
   /* ── 名簿の取り込み ── */
   var ROWS_PER_REQ = 8;
   function renderImport() {
@@ -956,13 +1158,13 @@ const JS = String.raw`
   /* ── 起動 ── */
   [].forEach.call(document.querySelectorAll('.tabs button'), function (b) {
     b.onclick = function () { var t = b.getAttribute('data-tab'); if (t === S.tab) return; guard().then(function (ok) { if (!ok) return;
-      if (S.tab === 'members') { S.draft = S.orig = null; S.sel = null; } else if (S.tab === 'roles') { S.rdraft = clone(S.rorig); }
+      if (S.tab === 'members') { S.draft = S.orig = null; S.sel = null; } else if (S.tab === 'roles') { S.rdraft = clone(S.rorig); } else if (S.tab === 'card') { S.cs = clone(S.csorig); }
       S.tab = t; lastDirty = null; render(); }); };
   });
   $('#logout').onclick = function () { api('POST', '/admin/logout').then(function () { location.reload(); }); };
   document.addEventListener('keydown', function (e) {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
-      e.preventDefault(); var b = S.tab === 'members' ? $('#save') : $('#rsave'); if (b && !b.disabled) b.click();
+      e.preventDefault(); var b = S.tab === 'members' ? $('#save') : S.tab === 'card' ? $('#cssave') : $('#rsave'); if (b && !b.disabled) b.click();
     }
   });
   window.addEventListener('beforeunload', function (e) { if (dirty()) { e.preventDefault(); e.returnValue = ''; } });
@@ -975,7 +1177,7 @@ export function buildAdminPage(base: string): string {
     "管理画面 — TECH CLUB",
     `<header class="bar">
   <h1>管理</h1>
-  <nav class="tabs"><button type="button" data-tab="members" class="on">メンバー</button><button type="button" data-tab="roles">肩書き</button><button type="button" data-tab="import">名簿取り込み</button></nav>
+  <nav class="tabs"><button type="button" data-tab="members" class="on">メンバー</button><button type="button" data-tab="roles">肩書き</button><button type="button" data-tab="card">名刺</button><button type="button" data-tab="import">名簿取り込み</button></nav>
   <span class="sp"></span>
   <a class="jump" href="/preview" target="_blank" rel="noopener">名刺プレビュー ↗</a>
   <button class="linkbtn" id="logout" type="button">ログアウト</button>

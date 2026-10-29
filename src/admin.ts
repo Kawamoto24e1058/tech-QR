@@ -12,16 +12,20 @@ import { buildAdminPage, buildLoginPage, buildNoPasswordPage } from "./admin-pag
 import { buildBackCard, buildFrontCard, type CardFields } from "./card-template";
 import { FontError } from "./fonts";
 import { buildRows, detectColumns, FIELD_LABELS, FIELDS, markDuplicates, MAX_FILE_BYTES, MAX_ROWS, readTable, RosterError, type Mapping } from "./roster";
-import { invalidateMember } from "./lookup";
+import { parseSettings } from "./card-settings";
+import { invalidateMember, invalidateSettings } from "./lookup";
 import {
   archiveMember,
   createMember,
+  getCardSettings,
   getMember,
   getRoles,
   ID_PATTERN,
+  isReservedId,
   listMembersFull,
   normalizeHandle,
   PLAIN_ROLES,
+  saveCardSettings,
   saveRoles,
   updateMember,
   validRoleText,
@@ -79,6 +83,15 @@ export async function handleAdmin(request: Request, env: Env): Promise<Response 
 
 async function api(request: Request, env: Env, path: string, method: string): Promise<Response> {
   if (path === "/admin/api/preview" && method === "POST") return previewCard(request, env);
+  if (path === "/admin/api/card-settings") {
+    if (method === "GET") return json({ settings: await getCardSettings(env) });
+    if (method === "PUT") {
+      const settings = parseSettings(((await readJson(request)) as { settings?: unknown }).settings);
+      await saveCardSettings(settings, env);
+      await invalidateSettings();
+      return json({ settings });
+    }
+  }
   if (path === "/admin/api/import/parse" && method === "POST") return parseRoster(request, env);
   if (path === "/admin/api/import" && method === "POST") return importRows(request, env);
 
@@ -155,7 +168,7 @@ async function api(request: Request, env: Env, path: string, method: string): Pr
 
 /** 入力途中（未保存）の内容で名刺を描画する。検証はせず、表示用に整えるだけ（SVG 側でエスケープされる） */
 async function previewCard(request: Request, env: Env): Promise<Response> {
-  const b = (await readJson(request)) as { side?: string; member?: Record<string, unknown> };
+  const b = (await readJson(request)) as { side?: string; member?: Record<string, unknown>; settings?: unknown };
   const m = b.member ?? {};
   const clip = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
   const id = ID_PATTERN.test(clip(m.id, 64)) ? clip(m.id, 64) : "your-id";
@@ -172,7 +185,9 @@ async function previewCard(request: Request, env: Env): Promise<Response> {
   };
   const base = (env.PUBLIC_BASE_URL || new URL(request.url).origin).replace(/\/+$/, "");
   // 画面用: 仕上がりサイズ、ロゴは URL 参照で軽量に
-  const opts = { bleed: false, logoHref: "/assets/logo.png" };
+  // 設定は画面が持っている内容（未保存の編集中も含む）を送ってくる。省略時は既定値（Notion は呼ばない）
+  const settings = parseSettings(b.settings);
+  const opts = { bleed: false, logoHref: "/assets/logo.png", settings };
   let svg: string;
   try {
     svg = b.side === "back" ? await buildBackCard(fields, `${base}/p/${id}`, opts) : await buildFrontCard(fields, opts);
@@ -328,8 +343,8 @@ function parseInput(
   const fail = (field: string, error: string): Failure => ({ error, field });
 
   const id = str(b.id);
-  if (!ID_PATTERN.test(id)) {
-    return fail("id", "ID は半角英数字と . _ - の 64 文字までで入力してください");
+  if (!ID_PATTERN.test(id) || isReservedId(id)) {
+    return fail("id", "ID は半角英数字と . _ - の 64 文字までで入力してください（先頭を __ にはできません）");
   }
 
   const targetUrl = str(b.targetUrl);

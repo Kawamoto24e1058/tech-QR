@@ -682,3 +682,60 @@ describe("名簿の取り込み", () => {
     expect((await api(cookie, "POST", "/admin/api/import", { rows: [] })).status).toBe(400);
   });
 });
+
+/* ────────────────────────────────────────────────────────────
+ *  名刺（表面）に載せる項目の設定
+ * ──────────────────────────────────────────────────────────── */
+
+describe("名刺の設定（表面に載せる項目）", () => {
+  const preview = async (cookie: string, body: unknown) =>
+    (await (await api(cookie, "POST", "/admin/api/preview", body)).text());
+
+  it("defaults to showing everything, and saves/reads back (sanitising bad values)", async () => {
+    const cookie = await login();
+    const def = ((await (await api(cookie, "GET", "/admin/api/card-settings")).json()) as any).settings;
+    expect(def).toEqual({ contacts: ["mail", "github", "x"], skills: 3, showNameEn: true, showRoleEn: true, showId: true });
+
+    const res = await api(cookie, "PUT", "/admin/api/card-settings", {
+      settings: { contacts: ["x", "mail", "mail", "fax"], skills: 9, showId: false },
+    });
+    expect(res.status).toBe(200);
+    const saved = ((await res.json()) as any).settings;
+    expect(saved).toMatchObject({ contacts: ["x", "mail"], skills: 3, showId: false, showNameEn: true });
+    expect(((await (await api(cookie, "GET", "/admin/api/card-settings")).json()) as any).settings).toEqual(saved);
+  });
+
+  it("keeps its storage row out of the member list and reserves IDs starting with __", async () => {
+    const cookie = await login();
+    await api(cookie, "PUT", "/admin/api/card-settings", { settings: { skills: 1 } });
+    const list = ((await (await api(cookie, "GET", "/admin/api/members")).json()) as any).members as any[];
+    expect(list.some((m) => m.id.startsWith("__"))).toBe(false);
+    const bad = await api(cookie, "POST", "/admin/api/members", member({ id: "__card_settings__" }));
+    expect(bad.status).toBe(422);
+    expect((await req("/preview/__card_settings__")).status).toBe(404);
+  });
+
+  it("applies the settings to the preview (draft settings) and to the real cards", async () => {
+    const cookie = await login();
+    const m = member();
+    const full = await preview(cookie, { side: "front", member: m });
+    expect(full).toContain('aria-label="github.com/taro-dev"');
+    expect(full).toContain('aria-label="TypeScript"');
+    expect(full).toContain('aria-label="DEV TEAM / TARO"');
+
+    const slim = await preview(cookie, { side: "front", member: m, settings: { contacts: ["mail"], skills: 1, showId: false, showNameEn: false, showRoleEn: false } });
+    expect(slim).toContain('aria-label="taro@example.com"');
+    expect(slim).not.toContain('aria-label="github.com/taro-dev"');
+    expect(slim).toContain('aria-label="TypeScript"');
+    expect(slim).not.toContain('aria-label="Cloudflare"');
+    expect(slim).not.toContain("DEV TEAM");
+    expect(slim).not.toContain('aria-label="Taro Yamada"');
+
+    // 保存すると、公開の /generate にも反映される
+    notion.add("taro", { nameJp: "山田 太郎", email: "taro@example.com", githubId: "taro-dev", role: "部長" });
+    await api(cookie, "PUT", "/admin/api/card-settings", { settings: { contacts: ["github"], skills: 0 } });
+    const svg = await (await req("/generate/taro")).text();
+    expect(svg).toContain('aria-label="github.com/taro-dev"');
+    expect(svg).not.toContain('aria-label="taro@example.com"');
+  });
+});

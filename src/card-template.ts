@@ -9,6 +9,7 @@
  * - 黒は #0a0a0c（画面用）。印刷所には「リッチブラック（K100 + C/M/Y 少量）」を指定するときれいに出る
  */
 import { encode } from "uqr";
+import { DEFAULT_SETTINGS, type CardSettings } from "./card-settings";
 import { buildTypesetter, fitSize, googleFontLoader, type FontLoader, type Typesetter } from "./fonts";
 import { LOGO_HEIGHT, LOGO_WHITE_DATA_URI, LOGO_WIDTH } from "./logo";
 import { backdrop, PANEL, SCHOOL, SEAL, SEAL_LOGO_HEIGHT, seal } from "./seal";
@@ -43,6 +44,8 @@ export interface RenderOpts {
   logoHref?: string;
   /** フォント取得処理の差し替え（テスト用） */
   fontLoader?: FontLoader;
+  /** 表面に載せる項目（既定: 全部載せる） */
+  settings?: CardSettings;
 }
 
 /* ────────────────────────────────────────────────────────────
@@ -50,8 +53,9 @@ export interface RenderOpts {
  * ──────────────────────────────────────────────────────────── */
 
 export async function buildFrontCard(f: CardFields, opts: RenderOpts = {}): Promise<string> {
-  const ts = await buildTypesetter((t) => front(t, f), opts.fontLoader ?? googleFontLoader);
-  return svg(front(ts, f), opts);
+  const st = opts.settings ?? DEFAULT_SETTINGS;
+  const ts = await buildTypesetter((t) => front(t, f, st), opts.fontLoader ?? googleFontLoader);
+  return svg(front(ts, f, st), opts);
 }
 
 export async function buildBackCard(_f: CardFields, qrTargetUrl: string, opts: RenderOpts = {}): Promise<string> {
@@ -113,7 +117,7 @@ function icon(kind: "mail" | "github" | "x", x: number, y: number): string {
  *  表面
  * ──────────────────────────────────────────────────────────── */
 
-function front(ts: Typesetter, f: CardFields): string {
+function front(ts: Typesetter, f: CardFields, st: CardSettings): string {
   const out: string[] = [];
 
   // 右奥に大きく薄いロゴ（枠の外へはみ出して切れる）
@@ -123,16 +127,18 @@ function front(ts: Typesetter, f: CardFields): string {
   // ヘッダ: ロゴ + 団体名
   out.push(logo(L, 62, 40));
   out.push(ts.text("display", "Tech Club", L + 56, 92, 28, { tracking: -0.3 }));
-  const sub = `DEV TEAM / ${f.id.toUpperCase()}`;
-  out.push(ts.text("mono", sub, L + 57, 116, fitSize(ts, "mono", sub, 15, 400, 11, 2), { opacity: 0.6, tracking: 2 }));
+  if (st.showId) {
+    const sub = `DEV TEAM / ${f.id.toUpperCase()}`;
+    out.push(ts.text("mono", sub, L + 57, 116, fitSize(ts, "mono", sub, 15, 400, 11, 2), { opacity: 0.6, tracking: 2 }));
+  }
 
   // 氏名（主役）
   const nameMain = f.nameJp || f.nameEn || f.id;
   out.push(ts.text("jp", nameMain, L - 6, 284, fitSize(ts, "jp", nameMain, 118, R - L + 6, 56, -2), { tracking: -2 }));
 
   // 英名 | 肩書き（英名の右に区切り線を挟んで同じ行に置く）
-  const en = f.nameJp && f.nameEn ? nice(f.nameEn) : "";
-  const roleEn = nice(f.roleEn);
+  const en = st.showNameEn && f.nameJp && f.nameEn ? nice(f.nameEn) : "";
+  const roleEn = st.showRoleEn ? nice(f.roleEn) : "";
   const y = 332;
   let x = L;
   if (en) {
@@ -156,7 +162,7 @@ function front(ts: Typesetter, f: CardFields): string {
   out.push(`<rect x="${L}" y="358" width="${R - L}" height="2" fill="${PAPER}" fill-opacity=".4"/>`);
 
   // スキル（先頭 3 つ。枠だけのピル）
-  const tags = f.skillTags.slice(0, 3).map((t) => clip(t, 16));
+  const tags = f.skillTags.slice(0, st.skills).map((t) => clip(t, 16));
   if (tags.length) {
     const gap = 18;
     let size = 17;
@@ -172,11 +178,12 @@ function front(ts: Typesetter, f: CardFields): string {
   }
 
   // 連絡先（存在するものを順に: 左 1 行目 → 左 2 行目 → 右 1 行目）。アイコン付き
-  const items = [
-    { kind: "mail" as const, text: f.email },
-    { kind: "github" as const, text: f.githubId && `github.com/${f.githubId}` },
-    { kind: "x" as const, text: f.xId && `@${f.xId}` },
-  ].filter((i) => i.text);
+  const all = {
+    mail: { kind: "mail" as const, text: f.email },
+    github: { kind: "github" as const, text: f.githubId && `github.com/${f.githubId}` },
+    x: { kind: "x" as const, text: f.xId && `@${f.xId}` },
+  };
+  const items = st.contacts.map((k) => all[k]).filter((i) => i.text);
   const slots = [
     { x: L, y: 456, max: 440 },
     { x: L, y: 488, max: 440 },

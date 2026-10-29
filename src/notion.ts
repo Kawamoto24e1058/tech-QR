@@ -9,12 +9,17 @@
  * Notion 側で直接編集しても同じデータを見るので、両方の入口が併存できる。
  */
 import type { CardFields } from "./card-template";
+import { DEFAULT_SETTINGS, parseSettings, type CardSettings } from "./card-settings";
 
 const NOTION_API = "https://api.notion.com/v1";
 const NOTION_VERSION = "2022-06-28";
 
 /** `:id` に使える文字。URL・SVGファイル名・Notion クエリへ渡す前に必ず検査する */
 export const ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
+
+/** 名刺の設定を入れておく専用の行の ID。`__` で始まる ID はメンバーに使えない（一覧・URL にも出ない） */
+export const SETTINGS_ID = "__card_settings__";
+export const isReservedId = (id: string) => id.startsWith("__");
 
 export interface NotionEnv {
   NOTION_API_KEY: string;
@@ -106,6 +111,7 @@ const queryDb = (env: NotionEnv, body: unknown): Promise<NotionQueryResponse> =>
 
 /** ID(Title) の完全一致で 1 人取得。いなければ null */
 export async function getMember(id: string, env: NotionEnv): Promise<Member | null> {
+  if (isReservedId(id)) return null;
   const data = await queryDb(env, { page_size: 1, filter: { property: "ID", title: { equals: id } } });
   const page = data.results?.[0];
   return page ? toMember(page) : null;
@@ -133,11 +139,40 @@ export async function listMembersFull(env: NotionEnv): Promise<Member[]> {
     });
     for (const page of data.results ?? []) {
       const m = toMember(page);
-      if (m.id) out.push(m);
+      if (m.id && !isReservedId(m.id)) out.push(m);
     }
     cursor = data.has_more ? (data.next_cursor ?? undefined) : undefined;
   } while (cursor);
   return out;
+}
+
+/* ── 名刺の設定（専用の行に JSON で保存。Database の列は増やさない）─────────── */
+
+async function settingsPage(env: NotionEnv): Promise<NotionPage | undefined> {
+  const data = await queryDb(env, { page_size: 1, filter: { property: "ID", title: { equals: SETTINGS_ID } } });
+  return data.results?.[0];
+}
+
+export async function getCardSettings(env: NotionEnv): Promise<CardSettings> {
+  const page = await settingsPage(env);
+  if (!page) return DEFAULT_SETTINGS;
+  try {
+    return parseSettings(JSON.parse(text(page, "SkillTags")));
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
+
+export async function saveCardSettings(settings: CardSettings, env: NotionEnv): Promise<void> {
+  const value = rich(JSON.stringify(settings));
+  const page = await settingsPage(env);
+  if (page?.id) await call(env, "PATCH", `/pages/${page.id}`, { properties: { SkillTags: value } });
+  else {
+    await call(env, "POST", "/pages", {
+      parent: { database_id: env.NOTION_DATABASE_ID },
+      properties: { ID: { title: [{ text: { content: SETTINGS_ID } }] }, Active: { checkbox: false }, SkillTags: value },
+    });
+  }
 }
 
 /* ── 書き込み（管理画面） ─────────────────────────────── */
