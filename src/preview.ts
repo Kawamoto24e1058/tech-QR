@@ -6,7 +6,7 @@
  * 名刺 SVG はダウンロード用の /generate エンドポイントと同じものを、
  * ここでは inline で埋め込んで表示する。
  */
-import { buildBackCard, buildFrontCard, escapeXml } from "./card-template";
+import { escapeXml } from "./card-template";
 import type { Member, MemberSummary } from "./notion";
 
 const esc = escapeXml;
@@ -46,7 +46,9 @@ const PREVIEW_CSS = `${BASE_CSS}
     border-radius: 6px; font-size: 13px; font-weight: 600;
   }
   .dl:hover { background: #d4d4d8; }
-  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  .alt { color: #8a8f98; font-size: 13px; text-decoration: underline; }
+  .failed { padding: 48px 20px; text-align: center; color: #fca5a5; font-size: 14px; }
 `;
 
 const INDEX_CSS = `${BASE_CSS}
@@ -67,13 +69,18 @@ const INDEX_CSS = `${BASE_CSS}
   .empty { color: #8a8f98; padding: 40px 0; text-align: center; }
 `;
 
-/** GET /preview/:id */
-export function buildCardPreview(m: Member, baseUrl: string): string {
+/** GET /preview/:id。cards は描画済み SVG（フォント取得に失敗した面は null） */
+export function buildCardPreview(
+  m: Member,
+  baseUrl: string,
+  cards: { front: string | null; back: string | null },
+): string {
   const id = m.id;
   const f = m.fields;
   const qrUrl = `${baseUrl}/p/${id}`;
-  const front = buildFrontCard(f);
-  const back = buildBackCard(f, qrUrl);
+  const failed = `<div class="failed">名刺を描画できませんでした（フォントの取得に失敗）。<a href="">再読み込み</a>してください。</div>`;
+  const front = cards.front ?? failed;
+  const back = cards.back ?? failed;
   const title = f.nameJp || f.nameEn || id;
   const dest = m.targetUrl
     ? `転送: <code>${esc(m.targetUrl)}</code>`
@@ -98,16 +105,16 @@ export function buildCardPreview(m: Member, baseUrl: string): string {
   <section>
     <div class="label">表面 / FRONT</div>
     <div class="card">${front}</div>
-    <div class="row"><a class="dl" href="/generate/${esc(id)}" download>↓ 表面 SVG をダウンロード</a></div>
+    <div class="row"><a class="dl" href="/generate/${esc(id)}" download>↓ 表面 SVG をダウンロード</a><a class="alt" href="/generate/${esc(id)}?bleed=0" download>塗り足しなし</a></div>
   </section>
 
   <section>
     <div class="label">裏面 / BACK</div>
     <div class="card">${back}</div>
-    <div class="row"><a class="dl" href="/generate/${esc(id)}/back" download>↓ 裏面 SVG をダウンロード</a></div>
+    <div class="row"><a class="dl" href="/generate/${esc(id)}/back" download>↓ 裏面 SVG をダウンロード</a><a class="alt" href="/generate/${esc(id)}/back?bleed=0" download>塗り足しなし</a></div>
   </section>
 
-  <p class="muted">入稿前に Illustrator 等でテキストをアウトライン化してください。</p>
+  <p class="muted">入稿用 SVG は<b>文字をアウトライン化済み</b>で、<b>塗り足し 3mm 付き（97×61mm）</b>です。画面の表示は仕上がりサイズ（91×55mm）。塗り足しなしが必要な場合は右の「塗り足しなし」を使ってください。</p>
 </div>
 </body>
 </html>`;

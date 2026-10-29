@@ -1,6 +1,7 @@
 import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
+import { fakeFontResponse } from "./helpers/fake-fonts";
 
 interface Member {
   targetUrl?: string;
@@ -40,9 +41,11 @@ function toNotionPage(id: string, m: Member) {
 }
 
 /** globalThis.fetch をスタブして Notion API 呼び出しを横取りする */
-function stubNotion(members: Record<string, Member>, opts: { fail?: boolean } = {}) {
+function stubNotion(members: Record<string, Member>, opts: { fail?: boolean; fontsFail?: boolean } = {}) {
   const spy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const fonts = fakeFontResponse(new URL(url));
+    if (fonts) return opts.fontsFail ? new Response("down", { status: 500 }) : fonts;
     if (!url.includes("api.notion.com")) {
       throw new Error(`unexpected fetch: ${url}`);
     }
@@ -151,14 +154,14 @@ describe("GET /generate/:id (front)", () => {
     );
 
     const svg = await res.text();
-    expect(svg).toContain('viewBox="0 0 910 550"');
-    expect(svg).toContain("山田 太郎");
-    expect(svg).toContain("TARO YAMADA");
-    expect(svg).toContain("部長");
-    expect(svg).toContain("github.com/taro");
-    expect(svg).toContain("@taro_dev");
-    expect(svg).toContain("TypeScript");
-    expect(svg).toContain("Cloudflare");
+    // 入稿用は塗り足し 3mm 付き（97×61mm）。文字はアウトライン化されている（<text> が無い）
+    expect(svg).toContain('viewBox="-30 -30 970 610"');
+    expect(svg).toContain('width="97mm" height="61mm"');
+    expect(svg).not.toContain("<text");
+    expect(svg).not.toContain("font-family");
+    for (const label of ["山田 太郎", "TARO YAMADA", "部長", "CLUB PRESIDENT", "github.com/taro", "@taro_dev", "TypeScript", "Cloudflare", "DEV TEAM / HARUHARU"]) {
+      expect(svg, label).toContain(`aria-label="${label}"`);
+    }
     expect(svg).not.toContain("{{");
   });
 
@@ -174,15 +177,15 @@ describe("GET /generate/:id (front)", () => {
     stubNotion({ xss: { Name_JP: '<script>alert("x")</script>' } });
     const res = await call("/generate/xss");
     const svg = await res.text();
-    expect(svg).toContain("&lt;script&gt;");
+    expect(svg).toContain("&#60;script&#62;"); // aria-label にも図形にもマークアップとして残らない
     expect(svg).not.toContain("<script>");
   });
 
   it("reads Role from a select and Role_EN from a formula string", async () => {
     stubNotion({ m: { Name_JP: "佐藤", Role: "会計", Role_EN: "Treasurer" } });
     const svg = await (await call("/generate/m")).text();
-    expect(svg).toContain("会計");
-    expect(svg).toContain("TREASURER"); // uppercased in the template
+    expect(svg).toContain('aria-label="会計"');
+    expect(svg).toContain('aria-label="TREASURER"'); // 英語表記は大文字で出る
   });
 
   it("omits the role lines when Role is unset", async () => {
@@ -203,6 +206,48 @@ describe("GET /generate/:id (front)", () => {
   });
 });
 
+describe("card rendering edge cases", () => {
+  it("?bleed=0 gives the trim-size (91×55mm) file", async () => {
+    stubNotion({ haruharu: { Name_JP: "山田" } });
+    const svg = await (await call("/generate/haruharu?bleed=0")).text();
+    expect(svg).toContain('viewBox="0 0 910 550"');
+    expect(svg).toContain('width="91mm" height="55mm"');
+    const back = await (await call("/generate/haruharu/back?bleed=0")).text();
+    expect(back).toContain('viewBox="0 0 910 550"');
+  });
+
+  it("renders a card with only the bare minimum (no role, links, or skills) and omits the empty parts", async () => {
+    stubNotion({ bare: { Name_JP: "無名" } });
+    const svg = await (await call("/generate/bare")).text();
+    expect(svg).toContain('aria-label="無名"');
+    expect(svg).not.toContain('aria-label="github');
+    expect(svg).not.toContain("TypeScript");
+    expect(svg).toContain('aria-label="DEV TEAM / BARE"'); // ID だけは常に出る
+  });
+
+  it("shrinks a very long name / email to stay inside the card instead of overflowing", async () => {
+    const long = "一".repeat(30);
+    stubNotion({ long: { Name_JP: long, Email: `${"a".repeat(80)}@example.com` } });
+    const svg = await (await call("/generate/long")).text();
+    expect(svg).toContain(`aria-label="${long}"`);
+    // 仮フォント(1 文字 = 0.6em)で 30 文字を 806 に収めるには size ≈ 44.8 以下 = 輪郭の高さが 124 単位のときより小さい
+    const nameD = svg.match(new RegExp(`aria-label="${long}"><path[^>]* d="([^"]+)"`))![1];
+    const ys = [...nameD.matchAll(/[ML]([\d.-]+) ([\d.-]+)/g)].map((m) => Number(m[2]));
+    expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(60); // 縮小済み（既定サイズなら ≈ 87）
+  });
+
+  it("returns 503 (retryable) for downloads when Google Fonts is unavailable, but keeps the preview page up", async () => {
+    stubNotion({ gone: { Name_JP: "未取得の文字列ふがほげ" } }, { fontsFail: true });
+    const dl = await call("/generate/gone");
+    expect(dl.status).toBe(503);
+    expect(dl.headers.get("Retry-After")).toBe("10");
+
+    const page = await call("/preview/gone");
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain("名刺を描画できませんでした");
+  });
+});
+
 describe("GET /generate/:id/back", () => {
   beforeEach(() => {
     stubNotion({ haruharu: { Name_JP: "山田 太郎" } });
@@ -216,12 +261,13 @@ describe("GET /generate/:id/back", () => {
     );
 
     const svg = await res.text();
-    expect(svg).toContain('viewBox="0 0 910 550"');
-    expect(svg).toContain("SCAN TO CONNECT");
+    expect(svg).toContain('viewBox="-30 -30 970 610"');
+    expect(svg).toContain('aria-label="SCAN"');
     // QR modules are rendered in the dark ink colour
     expect(svg).toContain('<g fill="#0a0a0c">');
     // display URL derived from request origin
-    expect(svg).toContain("qr.test/p/haruharu");
+    expect(svg).toContain('aria-label="qr.test"');
+    expect(svg).toContain('aria-label="/p/haruharu"');
   });
 
   it("accepts /back.svg", async () => {
@@ -248,10 +294,10 @@ describe("GET /generate/:id/back", () => {
     const url = "https://qr.test/p/haruharu";
     const { data, size: n } = encode(url, { ecc: "Q", border: 0 });
 
-    // buildBackCard の qrPanel(x305 y100 w300 h310) から renderQrPanel が算出する値
-    const OX = 326;
-    const OY = 126;
-    const SIZE = 258;
+    // back() の qr(url, 42, 48, 466)
+    const OX = 42;
+    const OY = 48;
+    const SIZE = 466;
     const quiet = 4;
     const cell = SIZE / (n + quiet * 2);
     const inFinder = (r: number, c: number) =>
@@ -331,10 +377,12 @@ describe("GET /preview/:id", () => {
     expect(html).toContain("山田 太郎");
     // both card SVGs embedded
     expect(html.match(/<svg /g)?.length).toBeGreaterThanOrEqual(2);
-    expect(html).toContain("SCAN TO CONNECT"); // back card present
+    expect(html).toContain('aria-label="SCAN"'); // back card present
+    expect(html).toContain('viewBox="0 0 910 550"'); // 画面表示は仕上がりサイズ
     // download links point at the attachment endpoints
     expect(html).toContain('href="/generate/haruharu" download');
     expect(html).toContain('href="/generate/haruharu/back" download');
+    expect(html).toContain('href="/generate/haruharu?bleed=0" download'); // 塗り足しなし
     // QR target uses the request origin
     expect(html).toContain("https://qr.test/p/haruharu");
   });

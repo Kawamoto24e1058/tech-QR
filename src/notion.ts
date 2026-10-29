@@ -223,6 +223,7 @@ function toMember(page: NotionPage): Member {
     active: checkbox(page, "Active"),
     targetUrl: url(page, "TargetURL"),
     fields: {
+      id: text(page, "ID"),
       nameJp: text(page, "Name_JP"),
       nameEn: text(page, "Name_EN"),
       roleJp: text(page, "Role"),

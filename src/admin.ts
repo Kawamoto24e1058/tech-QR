@@ -10,6 +10,7 @@
  */
 import { buildAdminPage, buildLoginPage, buildNoPasswordPage } from "./admin-page";
 import { buildBackCard, buildFrontCard, type CardFields } from "./card-template";
+import { FontError } from "./fonts";
 import { invalidateMember } from "./lookup";
 import {
   archiveMember,
@@ -146,7 +147,9 @@ async function previewCard(request: Request, env: Env): Promise<Response> {
   const b = (await readJson(request)) as { side?: string; member?: Record<string, unknown> };
   const m = b.member ?? {};
   const clip = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
+  const id = ID_PATTERN.test(clip(m.id, 64)) ? clip(m.id, 64) : "your-id";
   const fields: CardFields = {
+    id,
     nameJp: clip(m.nameJp, 40),
     nameEn: clip(m.nameEn, 60),
     roleJp: clip(m.role, 16),
@@ -156,10 +159,16 @@ async function previewCard(request: Request, env: Env): Promise<Response> {
     xId: normalizeHandle(clip(m.xId, 80), ["x.com", "twitter.com"]).slice(0, 50),
     skillTags: (Array.isArray(m.skills) ? m.skills : []).slice(0, 10).map((t) => clip(t, 24)).filter(Boolean),
   };
-  const id = ID_PATTERN.test(clip(m.id, 64)) ? clip(m.id, 64) : "your-id";
   const base = (env.PUBLIC_BASE_URL || new URL(request.url).origin).replace(/\/+$/, "");
-  const opts = { logoHref: "/assets/logo.png" };
-  const svg = b.side === "back" ? buildBackCard(fields, `${base}/p/${id}`, opts) : buildFrontCard(fields, opts);
+  // 画面用: 仕上がりサイズ、ロゴは URL 参照で軽量に
+  const opts = { bleed: false, logoHref: "/assets/logo-black.png" };
+  let svg: string;
+  try {
+    svg = b.side === "back" ? await buildBackCard(fields, `${base}/p/${id}`, opts) : await buildFrontCard(fields, opts);
+  } catch (err) {
+    if (err instanceof FontError) return json({ error: "フォントを取得できませんでした" }, 503);
+    throw err;
+  }
   return new Response(svg, {
     headers: { "Content-Type": "image/svg+xml; charset=utf-8", "Cache-Control": "no-store" },
   });

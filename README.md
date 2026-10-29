@@ -1,7 +1,7 @@
 # tech-QR — 名刺QR + プロフィール + 名刺SVG生成
 
 テック部の名刺用 Cloudflare Worker。**データの置き場所は Notion の Database 1 か所だけ**で、編集は管理画面（`/admin`）からでも Notion からでもできます。
-メンバーが触れるのは「データ」で、名刺の見た目はコード（`src/layout.ts`）に固定して組織で統一しています。
+メンバーが触れるのは「データ」で、名刺の見た目はコード（`src/card-template.ts`）に固定して組織で統一しています。
 
 | 何をする | URL | 内容 |
 | --- | --- | --- |
@@ -94,19 +94,31 @@ if(prop("Role") == "メンバー", "Member", "")))))))
 
 ---
 
-## 2. 名刺デザインの微調整
+## 2. 名刺のデザイン（BADGE）
 
-見た目は **`src/layout.ts` の `LAYOUT` 1 つ**（全員共通）。位置・サイズ・太さ・字間・色・表示/非表示をここで決めます。
-数値を直して再デプロイすれば全員の名刺に反映されます（Claude Code に「○○を右に10px」と頼めば数分）。
+名刺は **1 デザインに固定**（組織で統一）。黒地に白、白帯・反転ブロック・巨大アウトライン文字・ハーフトーン・バーコード風の装飾で構成。
 
-- 座標は 910 × 550 の viewBox（= 91mm × 55mm）。
-- 外枠・四隅マーク・区切り線などの固定装飾は `src/card-template.ts`。
-- **ロゴ**: `src/logo.png`（黒の PNG）を差し替えて `npm run embed-logo`（`src/logo.ts` を再生成）。
+| 面 | 内容 |
+| --- | --- |
+| 表 | 白帯にロゴ + `TECH CLUB` / `DEV TEAM / <ID>`、肩書き（反転ブロック）、氏名（超極太）、英名、スキル枠（先頭 3 つ）、連絡先（メール・GitHub・X）、ID から決まるバーコード柄 |
+| 裏 | 左に大きな実データ QR（`<PUBLIC_BASE_URL>/p/<id>`）、右に `SCAN ME`・URL・バーコード柄 |
+
+- **文字はすべてアウトライン（図形）で出力**します。入稿データでフォントが変わる・文字化けする心配がなく、Illustrator でのアウトライン化も不要です。
+  サーバーが Google Fonts から「その名刺に使う文字だけ」の小さなフォントを取得して輪郭を取り出し（`src/fonts.ts`）、結果は 1 週間キャッシュします。書体は Archivo Black（英字見出し）/ Noto Sans JP Black（日本語）/ Space Mono Bold（連絡先・ラベル）。
+- **塗り足し 3mm 付き（97×61mm）が既定**です（`/generate/:id`）。仕上がりサイズちょうど（91×55mm）が必要なら `?bleed=0`。プレビュー画面は仕上がりサイズで表示します。
+- 長い氏名・メールなどは**自動で文字サイズを縮めて**収めます（下限あり）。
+- 印刷の最小文字サイズは約 4.8pt（反転の小ラベル）、連絡先は約 6pt。文字・ロゴは仕上がり線から 3mm 以上内側に置いています。
+
+### 微調整のしかた
+位置・サイズ・色・書体は **`src/card-template.ts`**（配置の数値）と **`src/fonts.ts`**（書体）にまとまっています。数値を直して再デプロイすれば全員の名刺に反映されます（Claude Code に「連絡先をもう少し大きく」と頼めば数分）。
+
+### ロゴの差し替え
+`src/logo.png`（白背景・黒インクの PNG）を置き換えて `npm run embed-logo`。背景が透明な白ロゴ・黒ロゴを自動生成して `src/logo.ts` に埋め込みます。
 
 ### 入稿時の注意
-- テキストは**ライブテキスト**です。入稿前に Illustrator 等で**アウトライン化**してください。
-- 塗り足し（通常 3mm）が必要なら `viewBox` と背景・外枠を拡張します（今は仕上がりサイズぴったり）。
-- 裏面のQRは `<PUBLIC_BASE_URL>/p/<id>`。**最終データで実機スキャン**してください。
+- 黒は `#0a0a0c`（画面用）です。印刷所には**リッチブラック**（K100 に C/M/Y を少量足した黒）で刷るよう伝えるときれいに出ます。
+- 入稿形式（SVG / PDF / AI）は印刷所の指定に合わせて Illustrator 等で書き出してください（文字は既に図形、塗り足し付きのため、そのまま開けます）。
+- 裏面のQRは **最終データで実機スキャン**してください。
 
 ---
 
@@ -150,11 +162,12 @@ src/admin.ts          管理画面の認証と API（/admin/*）
 src/admin-page.ts     管理画面の HTML / JS
 src/lookup.ts         /p /profile 用の短命キャッシュ
 src/profile.ts        プロフィールページ（QR の着地点）
-src/card-template.ts  名刺SVG（表/裏/QR）の組み立て
-src/layout.ts         名刺の配置・サイズ・色（見た目の唯一の設定）
+src/card-template.ts  名刺SVG（表/裏/QR）のデザインと組み立て（見た目の設定はここ）
+src/fonts.ts          文字のアウトライン化（Google Fonts から必要な文字だけ取得）
 src/preview.ts        /preview の画面
 src/assets.ts         ロゴ画像の配信
-src/logo.ts / logo.png ロゴ（logo.ts は embed-logo で生成）
+src/logo.ts / logo.png ロゴ（logo.ts は embed-logo で生成。白・黒の透過PNG）
+src/opentype.d.ts     opentype.js の型（使う部分だけ）
 test/index.spec.ts    テスト
 ```
 
@@ -163,5 +176,5 @@ test/index.spec.ts    テスト
 - Notion は fetch 直叩き（API `2022-06-28`）。QR 読み取りは集中しうるので `/p` `/profile` は Cache API で短命キャッシュ（「いない」結果は最大 15 秒）。`/preview` `/generate` は常に最新。
 - 公開ページは `noindex`。プロフィールのリンクは `https://github.com/<id>` `https://x.com/<id>` `mailto:` のみ生成し、形式外のハンドル/メールは文字として表示（リンクにしない）。
 - `TargetURL` は `http(s)` のみ許可。Notion 由来の文字列は HTML/SVG へ出す際に必ずエスケープ。
-- 名刺の**見た目**を編集する UI は意図的に持たない（誰でも変えられると統一感が崩れるため）。見た目は `layout.ts` に固定し、変更は数値を直して再デプロイ。
+- 名刺の**見た目**を編集する UI は意図的に持たない（誰でも変えられると統一感が崩れるため）。見た目は `card-template.ts` に固定し、変更は数値を直して再デプロイ。
 - 管理画面が書くのは Notion だけ。データの置き場所は常に 1 か所。肩書きの英訳は Notion の数式（`Role_EN`）を正とし、管理画面はその数式を読み書きする。

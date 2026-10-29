@@ -2,6 +2,7 @@ import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import { ADMIN_CLIENT_JS } from "../src/admin-page";
+import { fakeFontResponse } from "./helpers/fake-fonts";
 
 const PASSWORD = "test-admin-password";
 
@@ -74,6 +75,8 @@ class FakeNotion {
 
   fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const u = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    const fonts = fakeFontResponse(u);
+    if (fonts) return fonts;
     if (u.host !== "api.notion.com") throw new Error(`unexpected fetch ${u}`);
     const method = init?.method ?? "GET";
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
@@ -417,10 +420,12 @@ describe("/admin/api/preview", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toBe("image/svg+xml; charset=utf-8");
     const svg = await res.text();
-    expect(svg).toContain("山田 太郎");
-    expect(svg).toContain("PRESIDENT");
-    expect(svg).toContain("github.com/octo"); // URL を貼っても ID に直る
-    expect(svg).toContain('href="/assets/logo.png"');
+    expect(svg).toContain('aria-label="山田 太郎"');
+    expect(svg).toContain('aria-label="PRESIDENT"');
+    expect(svg).toContain('aria-label="github.com/octo"'); // URL を貼っても ID に直る
+    expect(svg).toContain('href="/assets/logo-black.png"');
+    expect(svg).toContain('viewBox="0 0 910 550"'); // 画面用は塗り足しなし
+    expect(svg).not.toContain("<text");
     expect(svg).not.toContain("data:image/png;base64");
     expect(notion.calls.length).toBe(0); // プレビューは Notion を呼ばない
   });
@@ -428,7 +433,7 @@ describe("/admin/api/preview", () => {
   it("renders the back card with the QR pointing at the draft id, and tolerates garbage input", async () => {
     const cookie = await login();
     const back = await (await api(cookie, "POST", "/admin/api/preview", { side: "back", member: member({ id: "kai" }) })).text();
-    expect(back).toContain("qr.test/p/kai");
+    expect(back).toContain('aria-label="/p/kai"');
 
     const junk = await api(cookie, "POST", "/admin/api/preview", { side: "front", member: { nameJp: 123, skills: "x", id: "bad id" } });
     expect(junk.status).toBe(200);
@@ -442,7 +447,7 @@ describe("/admin/api/preview", () => {
       await api(cookie, "POST", "/admin/api/preview", { side: "front", member: member({ nameJp: "<script>alert(1)</script>" }) })
     ).text();
     expect(svg).not.toContain("<script>alert(1)</script>");
-    expect(svg).toContain("&lt;script&gt;");
+    expect(svg).toContain("&#60;script&#62;");
   });
 });
 

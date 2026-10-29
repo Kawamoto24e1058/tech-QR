@@ -70,7 +70,7 @@ export function buildProfilePage(m: Member): string {
   .card{position:relative;width:100%;max-width:440px;padding:36px 28px 28px;border:1px solid rgba(255,255,255,.88);border-radius:6px}
   .card::before{content:"";position:absolute;inset:5px;border:1px solid rgba(255,255,255,.12);border-radius:3px;pointer-events:none}
   header{display:flex;align-items:center;gap:14px;padding-bottom:22px;border-bottom:1px solid #3f3f46}
-  .logo{height:46px;width:auto;filter:invert(1);mix-blend-mode:screen}
+  .logo{height:46px;width:auto}
   .org b{display:block;font-size:12px;font-weight:700;letter-spacing:.3em}
   .org small{display:block;font-size:9.5px;letter-spacing:.28em;color:#52525b;margin-top:2px}
   .who{padding:34px 0 8px}

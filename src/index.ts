@@ -16,8 +16,9 @@
  *   その他                 DEFAULT_REDIRECT_URL へ転送
  */
 import { handleAdmin } from "./admin";
-import { logoPngBytes } from "./assets";
+import { logoBlackPng, logoWhitePng } from "./assets";
 import { buildBackCard, buildFrontCard, escapeXml } from "./card-template";
+import { FontError } from "./fonts";
 import { lookup } from "./lookup";
 import { getMember, ID_PATTERN, listMembers } from "./notion";
 import { buildCardPreview, buildIndexPage } from "./preview";
@@ -53,8 +54,8 @@ export default {
       return Response.json({ status: "ok", time: new Date().toISOString() }, noStore());
     }
 
-    if (pathname === "/assets/logo.png") {
-      return new Response(logoPngBytes(), {
+    if (pathname === "/assets/logo.png" || pathname === "/assets/logo-black.png") {
+      return new Response(pathname === "/assets/logo.png" ? logoWhitePng() : logoBlackPng(), {
         headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" },
       });
     }
@@ -90,7 +91,13 @@ export default {
       if (prev) {
         const id = decodeURIComponent(prev[1]);
         const member = ID_PATTERN.test(id) ? await getMember(id, env) : null;
-        return member ? html(buildCardPreview(member, base)) : notFound(id);
+        if (!member) return notFound(id);
+        // 文字のアウトライン化にフォント取得が必要。失敗してもページ自体は出す（カードだけ「再読み込み」案内）
+        const [front, back] = await Promise.all([
+          settle(() => buildFrontCard(member.fields, { bleed: false })),
+          settle(() => buildBackCard(member.fields, `${base}/p/${id}`, { bleed: false })),
+        ]);
+        return html(buildCardPreview(member, base, { front, back }));
       }
 
       const gen = pathname.match(/^\/generate\/([^/]+?)(?:\.svg)?(\/back)?(?:\.svg)?\/?$/);
@@ -98,9 +105,16 @@ export default {
         const id = decodeURIComponent(gen[1]);
         const member = ID_PATTERN.test(id) ? await getMember(id, env) : null;
         if (!member) return notFound(id);
-        return gen[2]
-          ? svgDownload(buildBackCard(member.fields, `${base}/p/${id}`), `${id}-card-back`)
-          : svgDownload(buildFrontCard(member.fields), `${id}-card-front`);
+        // 入稿用は塗り足し 3mm 付きが既定。?bleed=0 で仕上がりサイズ（91×55mm）ちょうど
+        const bleed = url.searchParams.get("bleed") !== "0";
+        try {
+          return gen[2]
+            ? svgDownload(await buildBackCard(member.fields, `${base}/p/${id}`, { bleed }), `${id}-card-back`)
+            : svgDownload(await buildFrontCard(member.fields, { bleed }), `${id}-card-front`);
+        } catch (err) {
+          if (err instanceof FontError) return fontsUnavailable(err);
+          throw err;
+        }
       }
     } catch (err) {
       console.error("request failed", { pathname, error: String(err) });
@@ -144,6 +158,25 @@ function svgDownload(svg: string, basename: string): Response {
       "Cache-Control": "no-store",
     },
   });
+}
+
+/** 文字のアウトライン化に使うフォントを取得できなかったとき（Google Fonts 側の一時的な障害など） */
+function fontsUnavailable(err: unknown): Response {
+  console.error("fonts unavailable", { error: String(err) });
+  return new Response("フォントを取得できませんでした。少し待ってからもう一度お試しください。", {
+    status: 503,
+    headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", "Retry-After": "10" },
+  });
+}
+
+/** 失敗しても例外にせず null を返す（プレビュー画面で一部だけ失敗を表示するため） */
+async function settle(fn: () => Promise<string>): Promise<string | null> {
+  try {
+    return await fn();
+  } catch (err) {
+    console.error("card render failed", { error: String(err) });
+    return null;
+  }
 }
 
 function badGateway(): Response {
